@@ -1,0 +1,71 @@
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { PatientInsurance, MemberType } from '../../entities/patient-insurance.entity';
+import { ProviderStatus } from '../../entities/insurance-provider.entity';
+
+export class PatientInsuranceResponseDto {
+  @ApiProperty() id!: string;
+  @ApiProperty() workspaceId!: string;
+  @ApiProperty() patientId!: string;
+  @ApiProperty() insuranceProviderId!: string;
+  @ApiProperty() schemeId!: string;
+  @ApiProperty() membershipNumber!: string;
+  @ApiPropertyOptional() policyNumber?: string;
+  @ApiProperty({ enum: MemberType }) memberType!: MemberType;
+  @ApiPropertyOptional() principalMemberId?: string;
+  @ApiPropertyOptional() relationshipToPrincipal?: string;
+  @ApiProperty({ enum: ProviderStatus }) status!: ProviderStatus;
+  @ApiProperty() isPrimary!: boolean;
+  @ApiProperty() priority!: number;
+  @ApiProperty() effectiveDate!: Date;
+  @ApiProperty() expiryDate!: Date;
+  @ApiPropertyOptional() enrollmentDate?: Date;
+  @ApiPropertyOptional() currentAuthorizationNumber?: string;
+  @ApiPropertyOptional() authorizationExpiryDate?: Date;
+  @ApiPropertyOptional() authorizationNotes?: string;
+  @ApiPropertyOptional() currentYearUtilization?: any;
+  @ApiPropertyOptional() insuranceContactPerson?: string;
+  @ApiPropertyOptional() insuranceContactPhone?: string;
+  @ApiPropertyOptional() insuranceContactEmail?: string;
+  @ApiPropertyOptional() lastVerifiedDate?: Date;
+  @ApiPropertyOptional() verifiedBy?: string;
+  @ApiPropertyOptional() verificationNotes?: string;
+  @ApiPropertyOptional() metadata?: any;
+  @ApiProperty() isActive!: boolean;
+  @ApiProperty() createdAt!: Date;
+  @ApiProperty() updatedAt!: Date;
+
+  static fromEntity(entity: PatientInsurance): PatientInsuranceResponseDto {
+    const dto = new PatientInsuranceResponseDto();
+    dto.id                          = entity.id;
+    dto.workspaceId                 = entity.workspaceId;
+    dto.patientId                   = entity.patientId;
+    dto.insuranceProviderId         = entity.insuranceProviderId;
+    dto.schemeId                    = entity.schemeId;
+    dto.membershipNumber            = entity.membershipNumber;
+    dto.policyNumber                = entity.policyNumber;
+    dto.memberType                  = entity.memberType;
+    dto.principalMemberId           = entity.principalMemberId;
+    dto.relationshipToPrincipal     = entity.relationshipToPrincipal;
+    dto.status                      = entity.status;
+    dto.isPrimary                   = entity.isPrimary;
+    dto.priority                    = entity.priority;
+    dto.effectiveDate               = entity.effectiveDate;
+    dto.expiryDate                  = entity.expiryDate;
+    dto.enrollmentDate              = entity.enrollmentDate;
+    dto.currentAuthorizationNumber  = entity.currentAuthorizationNumber;
+    dto.authorizationExpiryDate     = entity.authorizationExpiryDate;
+    dto.authorizationNotes          = entity.authorizationNotes;
+    dto.currentYearUtilization      = entity.currentYearUtilization;
+    dto.insuranceContactPerson      = entity.insuranceContactPerson;
+    dto.insuranceContactPhone       = entity.insuranceContactPhone;
+    dto.insuranceContactEmail       = entity.insuranceContactEmail;
+    dto.lastVerifiedDate            = entity.lastVerifiedDate;
+    dto.verifiedBy                  = entity.verifiedBy;
+    dto.verificationNotes           = entity.verificationNotes;
+    dto.metadata                    = entity.metadata;
+    dto.isActive                    = entity.isActive;
+    dto.createdAt                   = entity.createdAt;
+    dto.updatedAt                   = entity.updatedAt;
+    return dto;
+  }
+}

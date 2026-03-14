@@ -1,0 +1,1517 @@
+{
+  "info": {
+    "name": "EasyClinics EMR — Patients API v1",
+    "description": "Comprehensive Postman collection for the EasyClinics EMR Patients domain.\n\n## Setup\n1. Import this collection\n2. Create an environment with the variables listed below\n3. Run **Auth / Get Token** first — the token is auto-saved\n4. All subsequent requests use `{{token}}` automatically\n\n## Environment Variables\n| Variable | Example |\n|---|---|\n| `baseUrl` | `http://localhost:3000` |\n| `token` | *(auto-set by Pre-request Script)* |\n| `workspaceId` | `550e8400-e29b-41d4-a716-446655440000` |\n| `patientId` | *(set after Create Patient)* |\n| `allergyId` | *(set after Create Allergy)* |\n| `vitalId` | *(set after Record Vitals)* |\n| `medicalHistoryId` | *(set after Create Medical History)* |\n| `surgicalHistoryId` | *(set after Create Surgical History)* |\n| `socialHistoryId` | *(set after Create Social History)* |\n| `familyConditionId` | *(set after Create Family Condition)* |\n\n## Security\nAll routes protected by RS256 JWT (`WorkspaceJwtGuard` → `RolesGuard` → `PermissionsGuard`).\nPass `Authorization: Bearer {{token}}` header.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+    "_postman_id": "easyclinics-patients-v1"
+  },
+  "variable": [
+    { "key": "baseUrl",           "value": "http://localhost:3000",                         "type": "string" },
+    { "key": "workspaceId",       "value": "550e8400-e29b-41d4-a716-446655440000",          "type": "string" },
+    { "key": "patientId",         "value": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",          "type": "string" },
+    { "key": "allergyId",         "value": "b2c3d4e5-f6a7-8901-bcde-f12345678901",          "type": "string" },
+    { "key": "vitalId",           "value": "c3d4e5f6-a7b8-9012-cdef-123456789012",          "type": "string" },
+    { "key": "medicalHistoryId",  "value": "d4e5f6a7-b8c9-0123-defa-234567890123",          "type": "string" },
+    { "key": "surgicalHistoryId", "value": "e5f6a7b8-c9d0-1234-efab-345678901234",          "type": "string" },
+    { "key": "socialHistoryId",   "value": "f6a7b8c9-d0e1-2345-fabc-456789012345",          "type": "string" },
+    { "key": "familyConditionId", "value": "a7b8c9d0-e1f2-3456-abcd-567890123456",          "type": "string" },
+    { "key": "appointmentId",     "value": "b8c9d0e1-f2a3-4567-bcde-678901234567",          "type": "string" },
+    { "key": "token",             "value": "",                                               "type": "string" }
+  ],
+  "auth": {
+    "type": "bearer",
+    "bearer": [{ "key": "token", "value": "{{token}}", "type": "string" }]
+  },
+  "item": [
+
+    {
+      "name": "🔐 Auth",
+      "description": "Token acquisition. Run this first to populate {{token}}.",
+      "item": [
+        {
+          "name": "Get JWT Token (dev stub)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "const res = pm.response.json();",
+                  "if (res.access_token) {",
+                  "  pm.collectionVariables.set('token', res.access_token);",
+                  "  console.log('Token saved:', res.access_token.substring(0, 30) + '...');",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"admin@easyclinics.com\",\n  \"password\": \"supersecret\"\n}"
+            },
+            "url": { "raw": "{{baseUrl}}/api/v1/auth/login", "host": ["{{baseUrl}}"], "path": ["api","v1","auth","login"] }
+          },
+          "response": [
+            {
+              "name": "200 OK — Token returned",
+              "status": "OK",
+              "code": 200,
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\n  \"access_token\": \"eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ1c2VyLTEyMyIsImVtYWlsIjoiYWRtaW5AZWFzeWNsaW5pY3MuY29tIiwicm9sZSI6IndvcmtzcGFjZV9vd25lciIsIndvcmtzcGFjZUlkIjoiNTUwZTg0MDAtZTI5Yi00MWQ0LWE3MTYtNDQ2NjU1NDQwMDAwIiwiaWF0IjoxNzA5MDAwMDAwLCJleHAiOjE3MDkwMDM2MDB9.SIGNATURE\",\n  \"token_type\": \"Bearer\",\n  \"expires_in\": 3600\n}"
+            }
+          ]
+        }
+      ]
+    },
+
+    {
+      "name": "🧑‍⚕️ Patients",
+      "description": "Core patient CRUD, search, and index management.\nBase: `{{baseUrl}}/api/v1/patients`",
+      "item": [
+
+        {
+          "name": "Create Patient",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 201) {",
+                  "  const body = pm.response.json();",
+                  "  pm.collectionVariables.set('patientId', body.id);",
+                  "  console.log('patientId saved:', body.id);",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"firstName\": \"JOHN\",\n  \"lastName\": \"DOE\",\n  \"gender\": \"MALE\",\n  \"birthDate\": \"1990-05-15\",\n  \"phoneNumber\": \"+27821234567\",\n  \"email\": \"john.doe@example.com\",\n  \"city\": \"Cape Town\",\n  \"address\": \"123 Main Street, Gardens\",\n  \"nationalId\": \"9005155800088\",\n  \"fileNumber\": \"PAT-2024-001\"\n}"
+            },
+            "url": { "raw": "{{baseUrl}}/api/v1/patients", "host": ["{{baseUrl}}"], "path": ["api","v1","patients"] }
+          },
+          "response": [
+            {
+              "name": "201 Created",
+              "status": "Created",
+              "code": 201,
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\n  \"id\": \"a1b2c3d4-e5f6-7890-abcd-ef1234567890\",\n  \"workspaceId\": \"550e8400-e29b-41d4-a716-446655440000\",\n  \"firstName\": \"JOHN\",\n  \"lastName\": \"DOE\",\n  \"fullName\": \"JOHN DOE\",\n  \"gender\": \"MALE\",\n  \"formattedGender\": \"Male\",\n  \"birthDate\": \"1990-05-15\",\n  \"age\": \"34 years\",\n  \"ageYears\": 34,\n  \"ageMonths\": 8,\n  \"phoneNumber\": \"+27821234567\",\n  \"email\": \"john.doe@example.com\",\n  \"city\": \"Cape Town\",\n  \"address\": \"123 Main Street, Gardens\",\n  \"nationalId\": \"9005155800088\",\n  \"fileNumber\": \"PAT-2024-001\",\n  \"isActive\": true,\n  \"hasActiveAppointments\": false,\n  \"insurance\": null,\n  \"createdAt\": \"2024-01-15T10:30:00.000Z\",\n  \"updatedAt\": \"2024-01-15T10:30:00.000Z\",\n  \"deletedAt\": null\n}"
+            },
+            {
+              "name": "400 Validation Error",
+              "status": "Bad Request",
+              "code": 400,
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\n  \"statusCode\": 400,\n  \"message\": [\n    \"First name is required\",\n    \"Gender must be one of: MALE, FEMALE, OTHER, UNSPECIFIED\",\n    \"Birth date must be a valid ISO 8601 date string\"\n  ],\n  \"error\": \"Bad Request\"\n}"
+            },
+            {
+              "name": "403 Forbidden — insufficient role",
+              "status": "Forbidden",
+              "code": 403,
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\n  \"statusCode\": 403,\n  \"error\": \"Forbidden\",\n  \"message\": \"Role 'read_only' is not authorized. Required: [workspace_owner, system_admin, practice_admin, doctor, nurse, medical_assistant, scheduler]\",\n  \"code\": \"AUTHZ_002\",\n  \"timestamp\": \"2024-01-15T10:30:00.000Z\"\n}"
+            }
+          ]
+        },
+
+        {
+          "name": "Create Patient (with Insurance)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"firstName\": \"JANE\",\n  \"lastName\": \"SMITH\",\n  \"gender\": \"FEMALE\",\n  \"birthDate\": \"1985-11-22\",\n  \"phoneNumber\": \"+27831234567\",\n  \"email\": \"jane.smith@example.com\",\n  \"city\": \"Johannesburg\",\n  \"fileNumber\": \"PAT-2024-002\",\n  \"updatePatientInsurance\": true,\n  \"insuranceProviderId\": \"ins-provider-uuid-here\",\n  \"schemeId\": \"ins-scheme-uuid-here\",\n  \"insuranceMembershipNumber\": \"INS-2024-001\",\n  \"memberType\": \"PRINCIPAL\"\n}"
+            },
+            "url": { "raw": "{{baseUrl}}/api/v1/patients", "host": ["{{baseUrl}}"], "path": ["api","v1","patients"] }
+          },
+          "response": [
+            {
+              "name": "201 Created (with insurance)",
+              "status": "Created",
+              "code": 201,
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\n  \"id\": \"b2c3d4e5-f6a7-8901-bcde-f12345678901\",\n  \"workspaceId\": \"550e8400-e29b-41d4-a716-446655440000\",\n  \"firstName\": \"JANE\",\n  \"lastName\": \"SMITH\",\n  \"fullName\": \"JANE SMITH\",\n  \"gender\": \"FEMALE\",\n  \"formattedGender\": \"Female\",\n  \"birthDate\": \"1985-11-22\",\n  \"age\": \"38 years\",\n  \"ageYears\": 38,\n  \"ageMonths\": 2,\n  \"phoneNumber\": \"+27831234567\",\n  \"email\": \"jane.smith@example.com\",\n  \"city\": \"Johannesburg\",\n  \"fileNumber\": \"PAT-2024-002\",\n  \"isActive\": true,\n  \"hasActiveAppointments\": false,\n  \"insurance\": {\n    \"id\": \"ins-record-uuid\",\n    \"membershipNumber\": \"INS-2024-001\",\n    \"providerId\": \"ins-provider-uuid-here\",\n    \"providerName\": \"Discovery Health\",\n    \"providerCode\": \"DISC\",\n    \"schemeId\": \"ins-scheme-uuid-here\",\n    \"schemeName\": \"Classic Comprehensive\",\n    \"schemeCode\": \"CLASSIC\",\n    \"memberType\": \"PRINCIPAL\",\n    \"status\": \"ACTIVE\",\n    \"isPrimary\": true,\n    \"priority\": 1,\n    \"effectiveDate\": \"2024-01-01\",\n    \"expiryDate\": \"2024-12-31\",\n    \"currentAuthorizationNumber\": null,\n    \"authorizationExpiryDate\": null\n  },\n  \"createdAt\": \"2024-01-15T11:00:00.000Z\",\n  \"updatedAt\": \"2024-01-15T11:00:00.000Z\",\n  \"deletedAt\": null\n}"
+            }
+          ]
+        },
+
+        {
+          "name": "List Patients (paginated)",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/patients?workspaceId={{workspaceId}}&page=1&limit=10&sortBy=createdAt&sortDirection=DESC",
+              "host": ["{{baseUrl}}"],
+              "path": ["api","v1","patients"],
+              "query": [
+                { "key": "workspaceId",    "value": "{{workspaceId}}" },
+                { "key": "page",           "value": "1" },
+                { "key": "limit",          "value": "10" },
+                { "key": "sortBy",         "value": "createdAt" },
+                { "key": "sortDirection",  "value": "DESC" }
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "200 OK — paginated list",
+              "status": "OK",
+              "code": 200,
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\n  \"data\": [\n    {\n      \"id\": \"a1b2c3d4-e5f6-7890-abcd-ef1234567890\",\n      \"workspaceId\": \"550e8400-e29b-41d4-a716-446655440000\",\n      \"firstName\": \"JOHN\",\n      \"lastName\": \"DOE\",\n      \"fullName\": \"JOHN DOE\",\n      \"gender\": \"MALE\",\n      \"formattedGender\": \"Male\",\n      \"birthDate\": \"1990-05-15\",\n      \"age\": \"34 years\",\n      \"ageYears\": 34,\n      \"ageMonths\": 8,\n      \"phoneNumber\": \"+27821234567\",\n      \"email\": \"john.doe@example.com\",\n      \"city\": \"Cape Town\",\n      \"fileNumber\": \"PAT-2024-001\",\n      \"isActive\": true,\n      \"hasActiveAppointments\": false\n    }\n  ],\n  \"meta\": {\n    \"total\": 87,\n    \"page\": 1,\n    \"limit\": 10,\n    \"totalPages\": 9\n  },\n  \"searchMetadata\": {\n    \"searchMethod\": \"database\",\n    \"executionTime\": 23,\n    \"cacheHit\": false,\n    \"filtersApplied\": 0\n  }\n}"
+            }
+          ]
+        },
+
+        {
+          "name": "List Patients (with search + filters)",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/patients?workspaceId={{workspaceId}}&search=John&gender=MALE&isActive=true&city=Cape Town&page=1&limit=20&sortBy=lastName&sortDirection=ASC",
+              "host": ["{{baseUrl}}"],
+              "path": ["api","v1","patients"],
+              "query": [
+                { "key": "workspaceId",   "value": "{{workspaceId}}" },
+                { "key": "search",        "value": "John" },
+                { "key": "gender",        "value": "MALE" },
+                { "key": "isActive",      "value": "true" },
+                { "key": "city",          "value": "Cape Town" },
+                { "key": "page",          "value": "1" },
+                { "key": "limit",         "value": "20" },
+                { "key": "sortBy",        "value": "lastName" },
+                { "key": "sortDirection", "value": "ASC" }
+              ]
+            }
+          },
+          "response": []
+        },
+
+        {
+          "name": "List Patients (age range filter)",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/patients?workspaceId={{workspaceId}}&ageRange[min]=18&ageRange[max]=65&page=1&limit=10",
+              "host": ["{{baseUrl}}"],
+              "path": ["api","v1","patients"],
+              "query": [
+                { "key": "workspaceId",    "value": "{{workspaceId}}" },
+                { "key": "ageRange[min]",  "value": "18" },
+                { "key": "ageRange[max]",  "value": "65" },
+                { "key": "page",           "value": "1" },
+                { "key": "limit",          "value": "10" }
+              ]
+            }
+          },
+          "response": []
+        },
+
+        {
+          "name": "Get Patient by ID",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{baseUrl}}/api/v1/patients/{{patientId}}", "host": ["{{baseUrl}}"], "path": ["api","v1","patients","{{patientId}}"] }
+          },
+          "response": [
+            {
+              "name": "200 OK",
+              "status": "OK",
+              "code": 200,
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\n  \"id\": \"a1b2c3d4-e5f6-7890-abcd-ef1234567890\",\n  \"workspaceId\": \"550e8400-e29b-41d4-a716-446655440000\",\n  \"externalId\": null,\n  \"firstName\": \"JOHN\",\n  \"lastName\": \"DOE\",\n  \"fullName\": \"JOHN DOE\",\n  \"gender\": \"MALE\",\n  \"formattedGender\": \"Male\",\n  \"birthDate\": \"1990-05-15\",\n  \"age\": \"34 years\",\n  \"ageYears\": 34,\n  \"ageMonths\": 8,\n  \"phoneNumber\": \"+27821234567\",\n  \"email\": \"john.doe@example.com\",\n  \"city\": \"Cape Town\",\n  \"address\": \"123 Main Street, Gardens\",\n  \"nationalId\": \"9005155800088\",\n  \"fileNumber\": \"PAT-2024-001\",\n  \"isActive\": true,\n  \"hasActiveAppointments\": true,\n  \"insurance\": null,\n  \"createdAt\": \"2024-01-15T10:30:00.000Z\",\n  \"updatedAt\": \"2024-01-15T14:45:00.000Z\",\n  \"deletedAt\": null\n}"
+            },
+            {
+              "name": "404 Not Found",
+              "status": "Not Found",
+              "code": 404,
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\n  \"statusCode\": 404,\n  \"message\": \"Patient with ID a1b2c3d4-e5f6-7890-abcd-ef1234567890 not found\",\n  \"error\": \"Not Found\"\n}"
+            }
+          ]
+        },
+
+        {
+          "name": "Update Patient",
+          "request": {
+            "method": "PATCH",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"phoneNumber\": \"+27829876543\",\n  \"email\": \"john.new@example.com\",\n  \"address\": \"456 Oak Avenue, Claremont\",\n  \"city\": \"Cape Town\",\n  \"isActive\": true\n}"
+            },
+            "url": { "raw": "{{baseUrl}}/api/v1/patients/{{patientId}}", "host": ["{{baseUrl}}"], "path": ["api","v1","patients","{{patientId}}"] }
+          },
+          "response": [
+            {
+              "name": "200 OK — updated",
+              "status": "OK",
+              "code": 200,
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\n  \"id\": \"a1b2c3d4-e5f6-7890-abcd-ef1234567890\",\n  \"workspaceId\": \"550e8400-e29b-41d4-a716-446655440000\",\n  \"firstName\": \"JOHN\",\n  \"lastName\": \"DOE\",\n  \"fullName\": \"JOHN DOE\",\n  \"gender\": \"MALE\",\n  \"formattedGender\": \"Male\",\n  \"birthDate\": \"1990-05-15\",\n  \"age\": \"34 years\",\n  \"ageYears\": 34,\n  \"ageMonths\": 8,\n  \"phoneNumber\": \"+27829876543\",\n  \"email\": \"john.new@example.com\",\n  \"city\": \"Cape Town\",\n  \"address\": \"456 Oak Avenue, Claremont\",\n  \"nationalId\": \"9005155800088\",\n  \"fileNumber\": \"PAT-2024-001\",\n  \"isActive\": true,\n  \"hasActiveAppointments\": false,\n  \"createdAt\": \"2024-01-15T10:30:00.000Z\",\n  \"updatedAt\": \"2024-01-15T15:00:00.000Z\",\n  \"deletedAt\": null\n}"
+            }
+          ]
+        },
+
+        {
+          "name": "Soft Delete Patient",
+          "request": {
+            "method": "DELETE",
+            "url": { "raw": "{{baseUrl}}/api/v1/patients/{{patientId}}", "host": ["{{baseUrl}}"], "path": ["api","v1","patients","{{patientId}}"] }
+          },
+          "response": [
+            {
+              "name": "200 OK — soft deleted",
+              "status": "OK",
+              "code": 200,
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\n  \"message\": \"Patient record deactivated successfully\"\n}"
+            }
+          ]
+        },
+
+        {
+          "name": "🔍 Search — Advanced",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/patients/search/advanced?workspaceId={{workspaceId}}&search=Smith&gender=FEMALE&city=Johannesburg&ageRange[min]=30&ageRange[max]=50&isActive=true&page=1&limit=10",
+              "host": ["{{baseUrl}}"],
+              "path": ["api","v1","patients","search","advanced"],
+              "query": [
+                { "key": "workspaceId",   "value": "{{workspaceId}}" },
+                { "key": "search",        "value": "Smith" },
+                { "key": "gender",        "value": "FEMALE" },
+                { "key": "city",          "value": "Johannesburg" },
+                { "key": "ageRange[min]", "value": "30" },
+                { "key": "ageRange[max]", "value": "50" },
+                { "key": "isActive",      "value": "true" },
+                { "key": "page",          "value": "1" },
+                { "key": "limit",         "value": "10" }
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "200 OK",
+              "status": "OK",
+              "code": 200,
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\n  \"data\": [\n    {\n      \"id\": \"b2c3d4e5-f6a7-8901-bcde-f12345678901\",\n      \"fullName\": \"JANE SMITH\",\n      \"gender\": \"FEMALE\",\n      \"age\": \"38 years\",\n      \"city\": \"Johannesburg\",\n      \"fileNumber\": \"PAT-2024-002\",\n      \"isActive\": true\n    }\n  ],\n  \"meta\": { \"total\": 1, \"page\": 1, \"limit\": 10, \"totalPages\": 1 },\n  \"searchMetadata\": { \"searchMethod\": \"index\", \"executionTime\": 8, \"cacheHit\": true, \"filtersApplied\": 4 }\n}"
+            }
+          ]
+        },
+
+        {
+          "name": "🔍 Search — By File Number",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/patients/search/by-file-number?fileNumber=PAT-2024-001",
+              "host": ["{{baseUrl}}"],
+              "path": ["api","v1","patients","search","by-file-number"],
+              "query": [{ "key": "fileNumber", "value": "PAT-2024-001" }]
+            }
+          },
+          "response": [
+            {
+              "name": "200 OK",
+              "status": "OK",
+              "code": 200,
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\n  \"data\": [\n    { \"id\": \"a1b2c3d4-e5f6-7890-abcd-ef1234567890\", \"fullName\": \"JOHN DOE\", \"fileNumber\": \"PAT-2024-001\", \"isActive\": true }\n  ],\n  \"meta\": { \"total\": 1, \"page\": 1, \"limit\": 10, \"totalPages\": 1 },\n  \"searchMetadata\": { \"searchMethod\": \"index\", \"executionTime\": 2 }\n}"
+            }
+          ]
+        },
+
+        {
+          "name": "🔍 Search — By Phone",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/patients/search/by-phone?phoneNumber=%2B27821234567",
+              "host": ["{{baseUrl}}"],
+              "path": ["api","v1","patients","search","by-phone"],
+              "query": [{ "key": "phoneNumber", "value": "+27821234567" }]
+            }
+          },
+          "response": []
+        },
+
+        {
+          "name": "🔍 Search — By Name",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/patients/search/by-name?name=John Doe",
+              "host": ["{{baseUrl}}"],
+              "path": ["api","v1","patients","search","by-name"],
+              "query": [{ "key": "name", "value": "John Doe" }]
+            }
+          },
+          "response": []
+        },
+
+        {
+          "name": "📊 Index Stats (admin)",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{baseUrl}}/api/v1/patients/index/stats", "host": ["{{baseUrl}}"], "path": ["api","v1","patients","index","stats"] }
+          },
+          "response": [
+            {
+              "name": "200 OK",
+              "status": "OK",
+              "code": 200,
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\n  \"totalPatients\": 412,\n  \"lastUpdated\": \"2024-01-15T14:50:00.000Z\",\n  \"isBuilding\": false,\n  \"isStale\": false,\n  \"indexedKeys\": {\n    \"byId\": 412,\n    \"byFileNumber\": 398,\n    \"byPhone\": 371,\n    \"byEmail\": 364,\n    \"byNationalId\": 312,\n    \"byFirstName\": 287,\n    \"byLastName\": 301,\n    \"byFullName\": 412,\n    \"byCity\": 18\n  }\n}"
+            }
+          ]
+        },
+
+        {
+          "name": "♻️ Rebuild Index (admin)",
+          "request": {
+            "method": "POST",
+            "url": { "raw": "{{baseUrl}}/api/v1/patients/index/rebuild", "host": ["{{baseUrl}}"], "path": ["api","v1","patients","index","rebuild"] }
+          },
+          "response": [
+            {
+              "name": "200 OK",
+              "status": "OK",
+              "code": 200,
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\n  \"message\": \"Search index rebuild triggered successfully\"\n}"
+            }
+          ]
+        },
+
+        {
+          "name": "📦 Bulk Update Patients (admin)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "[\n  {\n    \"workspaceId\": \"{{workspaceId}}\",\n    \"id\": \"a1b2c3d4-e5f6-7890-abcd-ef1234567890\",\n    \"isActive\": true,\n    \"city\": \"Cape Town\"\n  },\n  {\n    \"workspaceId\": \"{{workspaceId}}\",\n    \"id\": \"b2c3d4e5-f6a7-8901-bcde-f12345678901\",\n    \"isActive\": false\n  }\n]"
+            },
+            "url": { "raw": "{{baseUrl}}/api/v1/patients/bulk-update", "host": ["{{baseUrl}}"], "path": ["api","v1","patients","bulk-update"] }
+          },
+          "response": [
+            {
+              "name": "200 OK",
+              "status": "OK",
+              "code": 200,
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\n  \"succeeded\": 2,\n  \"failed\": 0,\n  \"errors\": []\n}"
+            }
+          ]
+        }
+
+      ]
+    },
+
+    {
+      "name": "💉 Vital Signs",
+      "description": "Patient vital sign recording and retrieval.\nBase: `{{baseUrl}}/api/v1/vitals`",
+      "item": [
+
+        {
+          "name": "Record Vital Signs",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 201) {",
+                  "  const body = pm.response.json();",
+                  "  pm.collectionVariables.set('vitalId', body.id);",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"temperature\": \"37.2\",\n  \"bloodPressure\": \"120/80\",\n  \"heartRate\": \"72\",\n  \"saturation\": \"98\",\n  \"gcs\": \"15\",\n  \"bloodGlucose\": \"5.4\",\n  \"height\": \"178\",\n  \"weight\": \"82\",\n  \"time\": \"08:30\",\n  \"patientId\": \"{{patientId}}\",\n  \"appointmentId\": \"{{appointmentId}}\"\n}"
+            },
+            "url": { "raw": "{{baseUrl}}/api/v1/vitals", "host": ["{{baseUrl}}"], "path": ["api","v1","vitals"] }
+          },
+          "response": [
+            {
+              "name": "201 Created",
+              "status": "Created",
+              "code": 201,
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\n  \"id\": \"c3d4e5f6-a7b8-9012-cdef-123456789012\",\n  \"workspaceId\": \"550e8400-e29b-41d4-a716-446655440000\",\n  \"temperature\": \"37.2\",\n  \"bloodPressure\": \"120/80\",\n  \"heartRate\": \"72\",\n  \"saturation\": \"98\",\n  \"gcs\": \"15\",\n  \"bloodGlucose\": \"5.4\",\n  \"height\": \"178\",\n  \"weight\": \"82\",\n  \"time\": \"08:30\",\n  \"patientId\": \"a1b2c3d4-e5f6-7890-abcd-ef1234567890\",\n  \"appointmentId\": \"b8c9d0e1-f2a3-4567-bcde-678901234567\",\n  \"consultationId\": null,\n  \"userId\": \"user-uuid-from-jwt\",\n  \"isActive\": true,\n  \"createdAt\": \"2024-01-15T08:30:00.000Z\",\n  \"updatedAt\": \"2024-01-15T08:30:00.000Z\"\n}"
+            }
+          ]
+        },
+
+        {
+          "name": "List Vitals (with filters)",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/vitals?patientId={{patientId}}&page=1&limit=10&sortBy=createdAt&sortDirection=DESC",
+              "host": ["{{baseUrl}}"],
+              "path": ["api","v1","vitals"],
+              "query": [
+                { "key": "patientId",     "value": "{{patientId}}" },
+                { "key": "page",          "value": "1" },
+                { "key": "limit",         "value": "10" },
+                { "key": "sortBy",        "value": "createdAt" },
+                { "key": "sortDirection", "value": "DESC" }
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "200 OK",
+              "status": "OK",
+              "code": 200,
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\n  \"data\": [\n    {\n      \"id\": \"c3d4e5f6-a7b8-9012-cdef-123456789012\",\n      \"temperature\": \"37.2\",\n      \"bloodPressure\": \"120/80\",\n      \"heartRate\": \"72\",\n      \"saturation\": \"98\",\n      \"gcs\": \"15\",\n      \"bloodGlucose\": \"5.4\",\n      \"height\": \"178\",\n      \"weight\": \"82\",\n      \"time\": \"08:30\",\n      \"patientId\": \"a1b2c3d4-e5f6-7890-abcd-ef1234567890\",\n      \"createdAt\": \"2024-01-15T08:30:00.000Z\"\n    }\n  ],\n  \"meta\": { \"total\": 12, \"page\": 1, \"limit\": 10, \"totalPages\": 2 }\n}"
+            }
+          ]
+        },
+
+        {
+          "name": "Get Vitals by Patient",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/vitals/patient/{{patientId}}?page=1&limit=10",
+              "host": ["{{baseUrl}}"],
+              "path": ["api","v1","vitals","patient","{{patientId}}"],
+              "query": [
+                { "key": "page",  "value": "1" },
+                { "key": "limit", "value": "10" }
+              ]
+            }
+          },
+          "response": []
+        },
+
+        {
+          "name": "Get Vitals by Appointment",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/vitals/appointment/{{appointmentId}}?page=1&limit=10",
+              "host": ["{{baseUrl}}"],
+              "path": ["api","v1","vitals","appointment","{{appointmentId}}"],
+              "query": [
+                { "key": "page",  "value": "1" },
+                { "key": "limit", "value": "10" }
+              ]
+            }
+          },
+          "response": []
+        },
+
+        {
+          "name": "Get Latest Vital for Appointment",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{baseUrl}}/api/v1/vitals/appointment/{{appointmentId}}/latest", "host": ["{{baseUrl}}"], "path": ["api","v1","vitals","appointment","{{appointmentId}}","latest"] }
+          },
+          "response": [
+            {
+              "name": "200 OK — most recent vital",
+              "status": "OK",
+              "code": 200,
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\n  \"id\": \"c3d4e5f6-a7b8-9012-cdef-123456789012\",\n  \"temperature\": \"37.2\",\n  \"bloodPressure\": \"120/80\",\n  \"heartRate\": \"72\",\n  \"saturation\": \"98\",\n  \"gcs\": \"15\",\n  \"bloodGlucose\": \"5.4\",\n  \"height\": \"178\",\n  \"weight\": \"82\",\n  \"time\": \"08:30\",\n  \"patientId\": \"a1b2c3d4-e5f6-7890-abcd-ef1234567890\",\n  \"appointmentId\": \"b8c9d0e1-f2a3-4567-bcde-678901234567\",\n  \"createdAt\": \"2024-01-15T08:30:00.000Z\"\n}"
+            }
+          ]
+        },
+
+        {
+          "name": "Get Vital by ID",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{baseUrl}}/api/v1/vitals/{{vitalId}}", "host": ["{{baseUrl}}"], "path": ["api","v1","vitals","{{vitalId}}"] }
+          },
+          "response": []
+        },
+
+        {
+          "name": "Update Vital Signs",
+          "request": {
+            "method": "PATCH",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"bloodPressure\": \"118/76\",\n  \"heartRate\": \"68\",\n  \"saturation\": \"99\"\n}"
+            },
+            "url": { "raw": "{{baseUrl}}/api/v1/vitals/{{vitalId}}", "host": ["{{baseUrl}}"], "path": ["api","v1","vitals","{{vitalId}}"] }
+          },
+          "response": [
+            {
+              "name": "200 OK — updated",
+              "status": "OK",
+              "code": 200,
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\n  \"id\": \"c3d4e5f6-a7b8-9012-cdef-123456789012\",\n  \"bloodPressure\": \"118/76\",\n  \"heartRate\": \"68\",\n  \"saturation\": \"99\",\n  \"updatedAt\": \"2024-01-15T09:00:00.000Z\"\n}"
+            }
+          ]
+        },
+
+        {
+          "name": "Delete Vital",
+          "request": {
+            "method": "DELETE",
+            "url": { "raw": "{{baseUrl}}/api/v1/vitals/{{vitalId}}", "host": ["{{baseUrl}}"], "path": ["api","v1","vitals","{{vitalId}}"] }
+          },
+          "response": [
+            {
+              "name": "200 OK",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"message\": \"Vital record deleted successfully\"\n}"
+            }
+          ]
+        }
+
+      ]
+    },
+
+    {
+      "name": "🤧 Allergies",
+      "description": "Patient allergy and intolerance management.\nBase: `{{baseUrl}}/api/v1/allergies`",
+      "item": [
+
+        {
+          "name": "Record Allergy",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 201) {",
+                  "  pm.collectionVariables.set('allergyId', pm.response.json().id);",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"substance\": \"Penicillin\",\n  \"reaction\": \"Anaphylaxis — airway swelling, hives, hypotension\",\n  \"severity\": \"Life-threatening\",\n  \"patientId\": \"{{patientId}}\"\n}"
+            },
+            "url": { "raw": "{{baseUrl}}/api/v1/allergies", "host": ["{{baseUrl}}"], "path": ["api","v1","allergies"] }
+          },
+          "response": [
+            {
+              "name": "201 Created",
+              "status": "Created",
+              "code": 201,
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\n  \"id\": \"b2c3d4e5-f6a7-8901-bcde-f12345678901\",\n  \"workspaceId\": \"550e8400-e29b-41d4-a716-446655440000\",\n  \"substance\": \"Penicillin\",\n  \"reaction\": \"Anaphylaxis — airway swelling, hives, hypotension\",\n  \"severity\": \"Life-threatening\",\n  \"patientId\": \"a1b2c3d4-e5f6-7890-abcd-ef1234567890\",\n  \"userId\": \"user-uuid-from-jwt\",\n  \"isActive\": true,\n  \"createdAt\": \"2024-01-15T10:00:00.000Z\",\n  \"updatedAt\": \"2024-01-15T10:00:00.000Z\"\n}"
+            },
+            {
+              "name": "409 Conflict — duplicate",
+              "status": "Conflict",
+              "code": 409,
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\n  \"statusCode\": 409,\n  \"message\": \"Allergy to Penicillin already recorded for this patient\",\n  \"error\": \"Conflict\"\n}"
+            }
+          ]
+        },
+
+        {
+          "name": "List Allergies (with filters)",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/allergies?patientId={{patientId}}&page=1&limit=10",
+              "host": ["{{baseUrl}}"],
+              "path": ["api","v1","allergies"],
+              "query": [
+                { "key": "patientId", "value": "{{patientId}}" },
+                { "key": "page",      "value": "1" },
+                { "key": "limit",     "value": "10" }
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "200 OK",
+              "status": "OK",
+              "code": 200,
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\n  \"data\": [\n    {\n      \"id\": \"b2c3d4e5-f6a7-8901-bcde-f12345678901\",\n      \"substance\": \"Penicillin\",\n      \"reaction\": \"Anaphylaxis\",\n      \"severity\": \"Life-threatening\",\n      \"patientId\": \"a1b2c3d4-e5f6-7890-abcd-ef1234567890\",\n      \"isActive\": true,\n      \"createdAt\": \"2024-01-15T10:00:00.000Z\"\n    },\n    {\n      \"id\": \"d4e5f6a7-b8c9-0123-defa-234567890123\",\n      \"substance\": \"Sulfa drugs\",\n      \"reaction\": \"Severe rash, Stevens-Johnson syndrome risk\",\n      \"severity\": \"Severe\",\n      \"patientId\": \"a1b2c3d4-e5f6-7890-abcd-ef1234567890\",\n      \"isActive\": true,\n      \"createdAt\": \"2024-01-10T09:00:00.000Z\"\n    }\n  ],\n  \"meta\": { \"total\": 2, \"page\": 1, \"limit\": 10, \"totalPages\": 1 }\n}"
+            }
+          ]
+        },
+
+        {
+          "name": "List Allergies — filter by substance",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/allergies?substance=Penicillin&page=1&limit=10",
+              "host": ["{{baseUrl}}"],
+              "path": ["api","v1","allergies"],
+              "query": [
+                { "key": "substance", "value": "Penicillin" },
+                { "key": "page",      "value": "1" },
+                { "key": "limit",     "value": "10" }
+              ]
+            }
+          },
+          "response": []
+        },
+
+        {
+          "name": "Get Allergies by Patient",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/allergies/patient/{{patientId}}?page=1&limit=20",
+              "host": ["{{baseUrl}}"],
+              "path": ["api","v1","allergies","patient","{{patientId}}"],
+              "query": [
+                { "key": "page",  "value": "1" },
+                { "key": "limit", "value": "20" }
+              ]
+            }
+          },
+          "response": []
+        },
+
+        {
+          "name": "Get Allergies by Severity — Life-threatening",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/allergies/severity/Life-threatening?page=1&limit=20",
+              "host": ["{{baseUrl}}"],
+              "path": ["api","v1","allergies","severity","Life-threatening"],
+              "query": [
+                { "key": "page",  "value": "1" },
+                { "key": "limit", "value": "20" }
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "200 OK",
+              "status": "OK",
+              "code": 200,
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\n  \"data\": [\n    {\n      \"id\": \"b2c3d4e5-f6a7-8901-bcde-f12345678901\",\n      \"substance\": \"Penicillin\",\n      \"reaction\": \"Anaphylaxis\",\n      \"severity\": \"Life-threatening\",\n      \"patientId\": \"a1b2c3d4-e5f6-7890-abcd-ef1234567890\"\n    }\n  ],\n  \"meta\": { \"total\": 1, \"page\": 1, \"limit\": 20, \"totalPages\": 1 }\n}"
+            }
+          ]
+        },
+
+        {
+          "name": "Get Allergy by ID",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{baseUrl}}/api/v1/allergies/{{allergyId}}", "host": ["{{baseUrl}}"], "path": ["api","v1","allergies","{{allergyId}}"] }
+          },
+          "response": []
+        },
+
+        {
+          "name": "Update Allergy",
+          "request": {
+            "method": "PATCH",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"reaction\": \"Anaphylaxis — carries EpiPen\",\n  \"severity\": \"Life-threatening\"\n}"
+            },
+            "url": { "raw": "{{baseUrl}}/api/v1/allergies/{{allergyId}}", "host": ["{{baseUrl}}"], "path": ["api","v1","allergies","{{allergyId}}"] }
+          },
+          "response": []
+        },
+
+        {
+          "name": "Delete Allergy",
+          "request": {
+            "method": "DELETE",
+            "url": { "raw": "{{baseUrl}}/api/v1/allergies/{{allergyId}}", "host": ["{{baseUrl}}"], "path": ["api","v1","allergies","{{allergyId}}"] }
+          },
+          "response": [
+            {
+              "name": "200 OK",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"message\": \"Allergy record deleted successfully\"\n}"
+            }
+          ]
+        }
+
+      ]
+    },
+
+    {
+      "name": "📋 Patient History",
+      "description": "All clinical history sub-domains: medical, surgical, social, family conditions + composite endpoints.\nBase: `{{baseUrl}}/api/v1/patient-history`",
+      "item": [
+
+        {
+          "name": "🏥 Medical History",
+          "item": [
+
+            {
+              "name": "Create Medical History",
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "exec": [
+                      "if (pm.response.code === 201) {",
+                      "  pm.collectionVariables.set('medicalHistoryId', pm.response.json().id);",
+                      "}"
+                    ],
+                    "type": "text/javascript"
+                  }
+                }
+              ],
+              "request": {
+                "method": "POST",
+                "header": [{ "key": "Content-Type", "value": "application/json" }],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"condition\": \"Type 2 Diabetes Mellitus\",\n  \"details\": \"Diagnosed 2018. Currently managed with Metformin 850mg BD. HbA1c 7.2% at last review. No nephropathy or retinopathy detected.\",\n  \"patientId\": \"{{patientId}}\"\n}"
+                },
+                "url": { "raw": "{{baseUrl}}/api/v1/patient-history/medical", "host": ["{{baseUrl}}"], "path": ["api","v1","patient-history","medical"] }
+              },
+              "response": [
+                {
+                  "name": "201 Created",
+                  "status": "Created",
+                  "code": 201,
+                  "header": [{ "key": "Content-Type", "value": "application/json" }],
+                  "body": "{\n  \"id\": \"d4e5f6a7-b8c9-0123-defa-234567890123\",\n  \"workspaceId\": \"550e8400-e29b-41d4-a716-446655440000\",\n  \"condition\": \"Type 2 Diabetes Mellitus\",\n  \"details\": \"Diagnosed 2018. Currently managed with Metformin 850mg BD. HbA1c 7.2% at last review. No nephropathy or retinopathy detected.\",\n  \"patientId\": \"a1b2c3d4-e5f6-7890-abcd-ef1234567890\",\n  \"userId\": \"user-uuid-from-jwt\",\n  \"isActive\": true,\n  \"createdAt\": \"2024-01-15T10:00:00.000Z\",\n  \"updatedAt\": \"2024-01-15T10:00:00.000Z\"\n}"
+                }
+              ]
+            },
+
+            {
+              "name": "List Medical History",
+              "request": {
+                "method": "GET",
+                "url": {
+                  "raw": "{{baseUrl}}/api/v1/patient-history/medical?patientId={{patientId}}&page=1&limit=10",
+                  "host": ["{{baseUrl}}"],
+                  "path": ["api","v1","patient-history","medical"],
+                  "query": [
+                    { "key": "patientId", "value": "{{patientId}}" },
+                    { "key": "page",      "value": "1" },
+                    { "key": "limit",     "value": "10" }
+                  ]
+                }
+              },
+              "response": [
+                {
+                  "name": "200 OK",
+                  "status": "OK",
+                  "code": 200,
+                  "header": [{ "key": "Content-Type", "value": "application/json" }],
+                  "body": "{\n  \"data\": [\n    {\n      \"id\": \"d4e5f6a7-b8c9-0123-defa-234567890123\",\n      \"condition\": \"Type 2 Diabetes Mellitus\",\n      \"details\": \"Diagnosed 2018...\",\n      \"patientId\": \"a1b2c3d4-e5f6-7890-abcd-ef1234567890\",\n      \"isActive\": true,\n      \"createdAt\": \"2024-01-15T10:00:00.000Z\"\n    },\n    {\n      \"id\": \"e5f6a7b8-c9d0-1234-efab-345678901234\",\n      \"condition\": \"Essential Hypertension\",\n      \"details\": \"Diagnosed 2019. On Amlodipine 5mg OD. BP well controlled.\",\n      \"patientId\": \"a1b2c3d4-e5f6-7890-abcd-ef1234567890\",\n      \"isActive\": true,\n      \"createdAt\": \"2024-01-10T09:00:00.000Z\"\n    }\n  ],\n  \"meta\": { \"total\": 2, \"page\": 1, \"limit\": 10, \"totalPages\": 1 }\n}"
+                }
+              ]
+            },
+
+            {
+              "name": "Get Medical History by Patient",
+              "request": {
+                "method": "GET",
+                "url": {
+                  "raw": "{{baseUrl}}/api/v1/patient-history/medical/patient/{{patientId}}?page=1&limit=10",
+                  "host": ["{{baseUrl}}"],
+                  "path": ["api","v1","patient-history","medical","patient","{{patientId}}"],
+                  "query": [
+                    { "key": "page",  "value": "1" },
+                    { "key": "limit", "value": "10" }
+                  ]
+                }
+              },
+              "response": []
+            },
+
+            {
+              "name": "Get Chronic Conditions",
+              "request": {
+                "method": "GET",
+                "url": { "raw": "{{baseUrl}}/api/v1/patient-history/medical/patient/{{patientId}}/chronic", "host": ["{{baseUrl}}"], "path": ["api","v1","patient-history","medical","patient","{{patientId}}","chronic"] }
+              },
+              "response": [
+                {
+                  "name": "200 OK",
+                  "status": "OK",
+                  "code": 200,
+                  "header": [{ "key": "Content-Type", "value": "application/json" }],
+                  "body": "[\n  {\n    \"id\": \"d4e5f6a7-b8c9-0123-defa-234567890123\",\n    \"condition\": \"Type 2 Diabetes Mellitus\",\n    \"details\": \"Ongoing — requires monthly monitoring\",\n    \"patientId\": \"a1b2c3d4-e5f6-7890-abcd-ef1234567890\"\n  },\n  {\n    \"id\": \"e5f6a7b8-c9d0-1234-efab-345678901234\",\n    \"condition\": \"Essential Hypertension\",\n    \"details\": \"Controlled on Amlodipine\",\n    \"patientId\": \"a1b2c3d4-e5f6-7890-abcd-ef1234567890\"\n  }\n]"
+                }
+              ]
+            },
+
+            {
+              "name": "Get Medical History by ID",
+              "request": {
+                "method": "GET",
+                "url": { "raw": "{{baseUrl}}/api/v1/patient-history/medical/{{medicalHistoryId}}", "host": ["{{baseUrl}}"], "path": ["api","v1","patient-history","medical","{{medicalHistoryId}}"] }
+              },
+              "response": []
+            },
+
+            {
+              "name": "Update Medical History",
+              "request": {
+                "method": "PATCH",
+                "header": [{ "key": "Content-Type", "value": "application/json" }],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"details\": \"Diagnosed 2018. Now on Metformin 1000mg BD + Empagliflozin 10mg OD. HbA1c improved to 6.8%.\"\n}"
+                },
+                "url": { "raw": "{{baseUrl}}/api/v1/patient-history/medical/{{medicalHistoryId}}", "host": ["{{baseUrl}}"], "path": ["api","v1","patient-history","medical","{{medicalHistoryId}}"] }
+              },
+              "response": []
+            },
+
+            {
+              "name": "Delete Medical History",
+              "request": {
+                "method": "DELETE",
+                "url": { "raw": "{{baseUrl}}/api/v1/patient-history/medical/{{medicalHistoryId}}", "host": ["{{baseUrl}}"], "path": ["api","v1","patient-history","medical","{{medicalHistoryId}}"] }
+              },
+              "response": [
+                {
+                  "name": "200 OK",
+                  "status": "OK",
+                  "code": 200,
+                  "body": "{\n  \"message\": \"Medical history record deleted successfully\"\n}"
+                }
+              ]
+            }
+
+          ]
+        },
+
+        {
+          "name": "🔪 Surgical History",
+          "item": [
+
+            {
+              "name": "Create Surgical History",
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "exec": [
+                      "if (pm.response.code === 201) {",
+                      "  pm.collectionVariables.set('surgicalHistoryId', pm.response.json().id);",
+                      "}"
+                    ],
+                    "type": "text/javascript"
+                  }
+                }
+              ],
+              "request": {
+                "method": "POST",
+                "header": [{ "key": "Content-Type", "value": "application/json" }],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"procedure\": \"Laparoscopic Appendectomy\",\n  \"details\": \"Emergency procedure for acute appendicitis. Uncomplicated. Discharged day 2 post-op.\",\n  \"date\": \"2022-07-14\",\n  \"patientId\": \"{{patientId}}\"\n}"
+                },
+                "url": { "raw": "{{baseUrl}}/api/v1/patient-history/surgical", "host": ["{{baseUrl}}"], "path": ["api","v1","patient-history","surgical"] }
+              },
+              "response": [
+                {
+                  "name": "201 Created",
+                  "status": "Created",
+                  "code": 201,
+                  "header": [{ "key": "Content-Type", "value": "application/json" }],
+                  "body": "{\n  \"id\": \"e5f6a7b8-c9d0-1234-efab-345678901234\",\n  \"workspaceId\": \"550e8400-e29b-41d4-a716-446655440000\",\n  \"procedure\": \"Laparoscopic Appendectomy\",\n  \"details\": \"Emergency procedure for acute appendicitis. Uncomplicated.\",\n  \"date\": \"2022-07-14T00:00:00.000Z\",\n  \"patientId\": \"a1b2c3d4-e5f6-7890-abcd-ef1234567890\",\n  \"userId\": \"user-uuid-from-jwt\",\n  \"isActive\": true,\n  \"createdAt\": \"2024-01-15T10:00:00.000Z\",\n  \"updatedAt\": \"2024-01-15T10:00:00.000Z\"\n}"
+                },
+                {
+                  "name": "400 Future Date Rejected",
+                  "status": "Bad Request",
+                  "code": 400,
+                  "body": "{\n  \"statusCode\": 400,\n  \"message\": \"Surgery date cannot be in the future\",\n  \"error\": \"Bad Request\"\n}"
+                }
+              ]
+            },
+
+            {
+              "name": "List Surgical History",
+              "request": {
+                "method": "GET",
+                "url": {
+                  "raw": "{{baseUrl}}/api/v1/patient-history/surgical?patientId={{patientId}}&page=1&limit=10&sortBy=date&sortDirection=DESC",
+                  "host": ["{{baseUrl}}"],
+                  "path": ["api","v1","patient-history","surgical"],
+                  "query": [
+                    { "key": "patientId",     "value": "{{patientId}}" },
+                    { "key": "page",          "value": "1" },
+                    { "key": "limit",         "value": "10" },
+                    { "key": "sortBy",        "value": "date" },
+                    { "key": "sortDirection", "value": "DESC" }
+                  ]
+                }
+              },
+              "response": []
+            },
+
+            {
+              "name": "Get Surgical History by Patient",
+              "request": {
+                "method": "GET",
+                "url": {
+                  "raw": "{{baseUrl}}/api/v1/patient-history/surgical/patient/{{patientId}}?page=1&limit=10",
+                  "host": ["{{baseUrl}}"],
+                  "path": ["api","v1","patient-history","surgical","patient","{{patientId}}"],
+                  "query": [
+                    { "key": "page",  "value": "1" },
+                    { "key": "limit", "value": "10" }
+                  ]
+                }
+              },
+              "response": []
+            },
+
+            {
+              "name": "Get Surgeries with Complications",
+              "request": {
+                "method": "GET",
+                "url": {
+                  "raw": "{{baseUrl}}/api/v1/patient-history/surgical/complications?page=1&limit=20",
+                  "host": ["{{baseUrl}}"],
+                  "path": ["api","v1","patient-history","surgical","complications"],
+                  "query": [
+                    { "key": "page",  "value": "1" },
+                    { "key": "limit", "value": "20" }
+                  ]
+                }
+              },
+              "response": [
+                {
+                  "name": "200 OK",
+                  "status": "OK",
+                  "code": 200,
+                  "header": [{ "key": "Content-Type", "value": "application/json" }],
+                  "body": "{\n  \"data\": [\n    {\n      \"id\": \"f6a7b8c9-d0e1-2345-fabc-456789012345\",\n      \"procedure\": \"Open Cholecystectomy\",\n      \"details\": \"Bile duct injury — required ERCP. Extended hospital stay.\",\n      \"date\": \"2021-03-10T00:00:00.000Z\",\n      \"patientId\": \"a1b2c3d4-e5f6-7890-abcd-ef1234567890\"\n    }\n  ],\n  \"meta\": { \"total\": 1, \"page\": 1, \"limit\": 20, \"totalPages\": 1 }\n}"
+                }
+              ]
+            },
+
+            {
+              "name": "Get Surgical History by ID",
+              "request": {
+                "method": "GET",
+                "url": { "raw": "{{baseUrl}}/api/v1/patient-history/surgical/{{surgicalHistoryId}}", "host": ["{{baseUrl}}"], "path": ["api","v1","patient-history","surgical","{{surgicalHistoryId}}"] }
+              },
+              "response": []
+            },
+
+            {
+              "name": "Update Surgical History",
+              "request": {
+                "method": "PATCH",
+                "header": [{ "key": "Content-Type", "value": "application/json" }],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"details\": \"Emergency procedure for acute appendicitis. Uncomplicated. Follow-up wound check at 2 weeks — healing well.\"\n}"
+                },
+                "url": { "raw": "{{baseUrl}}/api/v1/patient-history/surgical/{{surgicalHistoryId}}", "host": ["{{baseUrl}}"], "path": ["api","v1","patient-history","surgical","{{surgicalHistoryId}}"] }
+              },
+              "response": []
+            },
+
+            {
+              "name": "Delete Surgical History",
+              "request": {
+                "method": "DELETE",
+                "url": { "raw": "{{baseUrl}}/api/v1/patient-history/surgical/{{surgicalHistoryId}}", "host": ["{{baseUrl}}"], "path": ["api","v1","patient-history","surgical","{{surgicalHistoryId}}"] }
+              },
+              "response": [
+                {
+                  "name": "200 OK",
+                  "status": "OK",
+                  "code": 200,
+                  "body": "{\n  \"message\": \"Surgical history record deleted successfully\"\n}"
+                }
+              ]
+            }
+
+          ]
+        },
+
+        {
+          "name": "🚬 Social History",
+          "item": [
+
+            {
+              "name": "Create Social History",
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "exec": [
+                      "if (pm.response.code === 201) {",
+                      "  pm.collectionVariables.set('socialHistoryId', pm.response.json().id);",
+                      "}"
+                    ],
+                    "type": "text/javascript"
+                  }
+                }
+              ],
+              "request": {
+                "method": "POST",
+                "header": [{ "key": "Content-Type", "value": "application/json" }],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"smokingStatus\": \"Former\",\n  \"alcoholUse\": \"Occasionally\",\n  \"drugUse\": \"Never\",\n  \"occupation\": \"Software Engineer\",\n  \"additionalNotes\": \"Quit smoking 5 years ago. Occasional social drinker (1-2 units/week). No recreational drug use.\",\n  \"patientId\": \"{{patientId}}\"\n}"
+                },
+                "url": { "raw": "{{baseUrl}}/api/v1/patient-history/social", "host": ["{{baseUrl}}"], "path": ["api","v1","patient-history","social"] }
+              },
+              "response": [
+                {
+                  "name": "201 Created",
+                  "status": "Created",
+                  "code": 201,
+                  "header": [{ "key": "Content-Type", "value": "application/json" }],
+                  "body": "{\n  \"id\": \"f6a7b8c9-d0e1-2345-fabc-456789012345\",\n  \"workspaceId\": \"550e8400-e29b-41d4-a716-446655440000\",\n  \"smokingStatus\": \"Former\",\n  \"alcoholUse\": \"Occasionally\",\n  \"drugUse\": \"Never\",\n  \"occupation\": \"Software Engineer\",\n  \"additionalNotes\": \"Quit smoking 5 years ago. Occasional social drinker.\",\n  \"patientId\": \"a1b2c3d4-e5f6-7890-abcd-ef1234567890\",\n  \"userId\": \"user-uuid-from-jwt\",\n  \"isActive\": true,\n  \"createdAt\": \"2024-01-15T10:00:00.000Z\",\n  \"updatedAt\": \"2024-01-15T10:00:00.000Z\"\n}"
+                }
+              ]
+            },
+
+            {
+              "name": "Get Social History by Patient",
+              "request": {
+                "method": "GET",
+                "url": { "raw": "{{baseUrl}}/api/v1/patient-history/social/patient/{{patientId}}", "host": ["{{baseUrl}}"], "path": ["api","v1","patient-history","social","patient","{{patientId}}"] }
+              },
+              "response": [
+                {
+                  "name": "200 OK",
+                  "status": "OK",
+                  "code": 200,
+                  "header": [{ "key": "Content-Type", "value": "application/json" }],
+                  "body": "{\n  \"id\": \"f6a7b8c9-d0e1-2345-fabc-456789012345\",\n  \"smokingStatus\": \"Former\",\n  \"alcoholUse\": \"Occasionally\",\n  \"drugUse\": \"Never\",\n  \"occupation\": \"Software Engineer\",\n  \"additionalNotes\": \"Quit smoking 5 years ago. Occasional social drinker.\",\n  \"patientId\": \"a1b2c3d4-e5f6-7890-abcd-ef1234567890\",\n  \"isActive\": true\n}"
+                }
+              ]
+            },
+
+            {
+              "name": "Get High Social-Risk Patients",
+              "request": {
+                "method": "GET",
+                "url": {
+                  "raw": "{{baseUrl}}/api/v1/patient-history/social/risk-patients?page=1&limit=20",
+                  "host": ["{{baseUrl}}"],
+                  "path": ["api","v1","patient-history","social","risk-patients"],
+                  "query": [
+                    { "key": "page",  "value": "1" },
+                    { "key": "limit", "value": "20" }
+                  ]
+                }
+              },
+              "response": [
+                {
+                  "name": "200 OK",
+                  "status": "OK",
+                  "code": 200,
+                  "header": [{ "key": "Content-Type", "value": "application/json" }],
+                  "body": "{\n  \"data\": [\n    {\n      \"id\": \"aa1122bb-cc33-dd44-ee55-ff6677889900\",\n      \"smokingStatus\": \"Current\",\n      \"alcoholUse\": \"Regularly\",\n      \"drugUse\": \"Current\",\n      \"patientId\": \"ff0011aa-bb22-cc33-dd44-ee5566778899\"\n    }\n  ],\n  \"meta\": { \"total\": 14, \"page\": 1, \"limit\": 20, \"totalPages\": 1 }\n}"
+                }
+              ]
+            },
+
+            {
+              "name": "Get Social History by ID",
+              "request": {
+                "method": "GET",
+                "url": { "raw": "{{baseUrl}}/api/v1/patient-history/social/{{socialHistoryId}}", "host": ["{{baseUrl}}"], "path": ["api","v1","patient-history","social","{{socialHistoryId}}"] }
+              },
+              "response": []
+            },
+
+            {
+              "name": "Update Social History",
+              "request": {
+                "method": "PATCH",
+                "header": [{ "key": "Content-Type", "value": "application/json" }],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"smokingStatus\": \"Never\",\n  \"additionalNotes\": \"Patient confirmed complete cessation 6 years ago. Nicotine replacement used for 12 months post-cessation.\"\n}"
+                },
+                "url": { "raw": "{{baseUrl}}/api/v1/patient-history/social/{{socialHistoryId}}", "host": ["{{baseUrl}}"], "path": ["api","v1","patient-history","social","{{socialHistoryId}}"] }
+              },
+              "response": []
+            },
+
+            {
+              "name": "Delete Social History",
+              "request": {
+                "method": "DELETE",
+                "url": { "raw": "{{baseUrl}}/api/v1/patient-history/social/{{socialHistoryId}}", "host": ["{{baseUrl}}"], "path": ["api","v1","patient-history","social","{{socialHistoryId}}"] }
+              },
+              "response": [
+                {
+                  "name": "200 OK",
+                  "status": "OK",
+                  "code": 200,
+                  "body": "{\n  \"message\": \"Social history record deleted successfully\"\n}"
+                }
+              ]
+            }
+
+          ]
+        },
+
+        {
+          "name": "👨‍👩‍👧 Family Conditions",
+          "item": [
+
+            {
+              "name": "Create Family Condition",
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "exec": [
+                      "if (pm.response.code === 201) {",
+                      "  pm.collectionVariables.set('familyConditionId', pm.response.json().id);",
+                      "}"
+                    ],
+                    "type": "text/javascript"
+                  }
+                }
+              ],
+              "request": {
+                "method": "POST",
+                "header": [{ "key": "Content-Type", "value": "application/json" }],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"relationshipToPatient\": \"Mother\",\n  \"condition\": \"Breast Cancer\",\n  \"snomedCode\": \"254837009\",\n  \"ageOfOnset\": 52,\n  \"currentAge\": 68,\n  \"isDeceased\": false,\n  \"notes\": \"Diagnosed with BRCA2 positive breast cancer. Underwent mastectomy and chemotherapy. Currently in remission.\",\n  \"patientId\": \"{{patientId}}\"\n}"
+                },
+                "url": { "raw": "{{baseUrl}}/api/v1/patient-history/family", "host": ["{{baseUrl}}"], "path": ["api","v1","patient-history","family"] }
+              },
+              "response": [
+                {
+                  "name": "201 Created",
+                  "status": "Created",
+                  "code": 201,
+                  "header": [{ "key": "Content-Type", "value": "application/json" }],
+                  "body": "{\n  \"id\": \"a7b8c9d0-e1f2-3456-abcd-567890123456\",\n  \"relationshipToPatient\": \"Mother\",\n  \"condition\": \"Breast Cancer\",\n  \"snomedCode\": \"254837009\",\n  \"ageOfOnset\": 52,\n  \"currentAge\": 68,\n  \"isDeceased\": false,\n  \"causeOfDeath\": null,\n  \"notes\": \"Diagnosed with BRCA2 positive breast cancer. Underwent mastectomy.\",\n  \"patientId\": \"a1b2c3d4-e5f6-7890-abcd-ef1234567890\",\n  \"createdAt\": \"2024-01-15T10:00:00.000Z\",\n  \"updatedAt\": \"2024-01-15T10:00:00.000Z\"\n}"
+                },
+                {
+                  "name": "400 Business Rule Violation",
+                  "status": "Bad Request",
+                  "code": 400,
+                  "body": "{\n  \"statusCode\": 400,\n  \"message\": \"Age of onset (60) cannot exceed current age (45)\",\n  \"error\": \"Bad Request\"\n}"
+                }
+              ]
+            },
+
+            {
+              "name": "Create Family Condition (deceased)",
+              "request": {
+                "method": "POST",
+                "header": [{ "key": "Content-Type", "value": "application/json" }],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"relationshipToPatient\": \"Father\",\n  \"condition\": \"Ischemic Heart Disease\",\n  \"snomedCode\": \"414545008\",\n  \"ageOfOnset\": 61,\n  \"currentAge\": 65,\n  \"isDeceased\": true,\n  \"causeOfDeath\": \"Acute myocardial infarction\",\n  \"notes\": \"Father had two prior MIs before fatal event. Heavy smoker for 30 years.\",\n  \"patientId\": \"{{patientId}}\"\n}"
+                },
+                "url": { "raw": "{{baseUrl}}/api/v1/patient-history/family", "host": ["{{baseUrl}}"], "path": ["api","v1","patient-history","family"] }
+              },
+              "response": [
+                {
+                  "name": "201 Created",
+                  "status": "Created",
+                  "code": 201,
+                  "body": "{\n  \"id\": \"b8c9d0e1-f2a3-4567-bcde-678901234567\",\n  \"relationshipToPatient\": \"Father\",\n  \"condition\": \"Ischemic Heart Disease\",\n  \"snomedCode\": \"414545008\",\n  \"ageOfOnset\": 61,\n  \"currentAge\": 65,\n  \"isDeceased\": true,\n  \"causeOfDeath\": \"Acute myocardial infarction\",\n  \"notes\": \"Father had two prior MIs before fatal event.\",\n  \"patientId\": \"a1b2c3d4-e5f6-7890-abcd-ef1234567890\",\n  \"createdAt\": \"2024-01-15T10:05:00.000Z\",\n  \"updatedAt\": \"2024-01-15T10:05:00.000Z\"\n}"
+                }
+              ]
+            },
+
+            {
+              "name": "List Family Conditions",
+              "request": {
+                "method": "GET",
+                "url": {
+                  "raw": "{{baseUrl}}/api/v1/patient-history/family?patientId={{patientId}}&page=1&limit=10",
+                  "host": ["{{baseUrl}}"],
+                  "path": ["api","v1","patient-history","family"],
+                  "query": [
+                    { "key": "patientId", "value": "{{patientId}}" },
+                    { "key": "page",      "value": "1" },
+                    { "key": "limit",     "value": "10" }
+                  ]
+                }
+              },
+              "response": []
+            },
+
+            {
+              "name": "Get Family Conditions by Patient",
+              "request": {
+                "method": "GET",
+                "url": {
+                  "raw": "{{baseUrl}}/api/v1/patient-history/family/patient/{{patientId}}?page=1&limit=10",
+                  "host": ["{{baseUrl}}"],
+                  "path": ["api","v1","patient-history","family","patient","{{patientId}}"],
+                  "query": [
+                    { "key": "page",  "value": "1" },
+                    { "key": "limit", "value": "10" }
+                  ]
+                }
+              },
+              "response": []
+            },
+
+            {
+              "name": "Genetic Risk Pattern Analysis",
+              "request": {
+                "method": "GET",
+                "url": { "raw": "{{baseUrl}}/api/v1/patient-history/family/patient/{{patientId}}/pattern-analysis", "host": ["{{baseUrl}}"], "path": ["api","v1","patient-history","family","patient","{{patientId}}","pattern-analysis"] }
+              },
+              "response": [
+                {
+                  "name": "200 OK — risk analysis",
+                  "status": "OK",
+                  "code": 200,
+                  "header": [{ "key": "Content-Type", "value": "application/json" }],
+                  "body": "{\n  \"patientId\": \"a1b2c3d4-e5f6-7890-abcd-ef1234567890\",\n  \"overallRiskLevel\": \"HIGH\",\n  \"riskScore\": 7.4,\n  \"conditions\": [\n    {\n      \"condition\": \"Breast Cancer\",\n      \"riskCategory\": \"HIGH\",\n      \"affectedRelatives\": 1,\n      \"firstDegreeAffected\": true,\n      \"earlyOnset\": false,\n      \"riskMultiplier\": 2.1\n    },\n    {\n      \"condition\": \"Ischemic Heart Disease\",\n      \"riskCategory\": \"HIGH\",\n      \"affectedRelatives\": 1,\n      \"firstDegreeAffected\": true,\n      \"earlyOnset\": false,\n      \"riskMultiplier\": 1.8\n    }\n  ],\n  \"hereditaryPatterns\": [\n    \"Maternal history of BRCA2-associated breast cancer — consider genetic screening\",\n    \"Paternal history of premature cardiovascular disease\"\n  ],\n  \"clinicalRecommendations\": [\n    \"Refer for BRCA1/BRCA2 genetic counselling and testing\",\n    \"Annual mammography from age 30\",\n    \"Cardiology risk stratification — fasting lipids, ECG, stress test\",\n    \"Low-dose aspirin prophylaxis discussion\"\n  ],\n  \"analysedAt\": \"2024-01-15T10:10:00.000Z\"\n}"
+                }
+              ]
+            },
+
+            {
+              "name": "Get Family Condition by ID",
+              "request": {
+                "method": "GET",
+                "url": { "raw": "{{baseUrl}}/api/v1/patient-history/family/{{familyConditionId}}", "host": ["{{baseUrl}}"], "path": ["api","v1","patient-history","family","{{familyConditionId}}"] }
+              },
+              "response": []
+            },
+
+            {
+              "name": "Update Family Condition",
+              "request": {
+                "method": "PATCH",
+                "header": [{ "key": "Content-Type", "value": "application/json" }],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"currentAge\": 70,\n  \"notes\": \"BRCA2 positive confirmed via genetic test. Currently disease-free at 5-year follow-up.\"\n}"
+                },
+                "url": { "raw": "{{baseUrl}}/api/v1/patient-history/family/{{familyConditionId}}", "host": ["{{baseUrl}}"], "path": ["api","v1","patient-history","family","{{familyConditionId}}"] }
+              },
+              "response": []
+            },
+
+            {
+              "name": "Delete Family Condition",
+              "request": {
+                "method": "DELETE",
+                "url": { "raw": "{{baseUrl}}/api/v1/patient-history/family/{{familyConditionId}}", "host": ["{{baseUrl}}"], "path": ["api","v1","patient-history","family","{{familyConditionId}}"] }
+              },
+              "response": [
+                {
+                  "name": "200 OK",
+                  "status": "OK",
+                  "code": 200,
+                  "body": "{\n  \"message\": \"Family condition record deleted successfully\"\n}"
+                }
+              ]
+            }
+
+          ]
+        },
+
+        {
+          "name": "📦 Composite Endpoints",
+          "item": [
+
+            {
+              "name": "Get Complete Patient History",
+              "request": {
+                "method": "GET",
+                "url": { "raw": "{{baseUrl}}/api/v1/patient-history/complete/{{patientId}}", "host": ["{{baseUrl}}"], "path": ["api","v1","patient-history","complete","{{patientId}}"] }
+              },
+              "response": [
+                {
+                  "name": "200 OK — all history types",
+                  "status": "OK",
+                  "code": 200,
+                  "header": [{ "key": "Content-Type", "value": "application/json" }],
+                  "body": "{\n  \"patientId\": \"a1b2c3d4-e5f6-7890-abcd-ef1234567890\",\n  \"allergies\": [\n    { \"id\": \"b2c3d4e5-f6a7-8901-bcde-f12345678901\", \"substance\": \"Penicillin\", \"severity\": \"Life-threatening\" },\n    { \"id\": \"d4e5f6a7-b8c9-0123-defa-234567890123\", \"substance\": \"Sulfa drugs\", \"severity\": \"Severe\" }\n  ],\n  \"allergyCount\": 2,\n  \"socialHistory\": {\n    \"id\": \"f6a7b8c9-d0e1-2345-fabc-456789012345\",\n    \"smokingStatus\": \"Former\",\n    \"alcoholUse\": \"Occasionally\",\n    \"drugUse\": \"Never\",\n    \"occupation\": \"Software Engineer\"\n  },\n  \"medicalHistory\": [\n    { \"id\": \"d4e5f6a7-b8c9-0123-defa-234567890123\", \"condition\": \"Type 2 Diabetes Mellitus\" },\n    { \"id\": \"e5f6a7b8-c9d0-1234-efab-345678901234\", \"condition\": \"Essential Hypertension\" }\n  ],\n  \"medicalHistoryCount\": 2,\n  \"surgicalHistory\": [\n    { \"id\": \"e5f6a7b8-c9d0-1234-efab-345678901234\", \"procedure\": \"Laparoscopic Appendectomy\", \"date\": \"2022-07-14T00:00:00.000Z\" }\n  ],\n  \"surgicalHistoryCount\": 1,\n  \"familyConditions\": [\n    { \"id\": \"a7b8c9d0-e1f2-3456-abcd-567890123456\", \"relationshipToPatient\": \"Mother\", \"condition\": \"Breast Cancer\" },\n    { \"id\": \"b8c9d0e1-f2a3-4567-bcde-678901234567\", \"relationshipToPatient\": \"Father\", \"condition\": \"Ischemic Heart Disease\" }\n  ],\n  \"familyConditionCount\": 2,\n  \"lastUpdated\": \"2024-01-15T10:15:00.000Z\"\n}"
+                }
+              ]
+            },
+
+            {
+              "name": "Get Patient Risk Profile",
+              "request": {
+                "method": "GET",
+                "url": { "raw": "{{baseUrl}}/api/v1/patient-history/risk-profile/{{patientId}}", "host": ["{{baseUrl}}"], "path": ["api","v1","patient-history","risk-profile","{{patientId}}"] }
+              },
+              "response": [
+                {
+                  "name": "200 OK — risk profile",
+                  "status": "OK",
+                  "code": 200,
+                  "header": [{ "key": "Content-Type", "value": "application/json" }],
+                  "body": "{\n  \"patientId\": \"a1b2c3d4-e5f6-7890-abcd-ef1234567890\",\n  \"overallRisk\": \"HIGH\",\n  \"factors\": {\n    \"severeAllergies\": 2,\n    \"socialRisk\": \"LOW\",\n    \"chronicConditions\": 2,\n    \"recentSurgeries\": 0\n  },\n  \"recommendations\": [\n    \"Review allergy management plan with patient\",\n    \"Ensure emergency medications are prescribed\",\n    \"Coordinate care with specialists for chronic conditions\",\n    \"Review medication adherence and interactions\"\n  ],\n  \"assessedAt\": \"2024-01-15T10:20:00.000Z\"\n}"
+                }
+              ]
+            }
+
+          ]
+        }
+
+      ]
+    },
+
+    {
+      "name": "❌ Error Responses Reference",
+      "description": "Reference folder showing all standardised error shapes returned by the API.",
+      "item": [
+
+        {
+          "name": "401 Unauthorized — no token",
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "GET",
+            "url": { "raw": "{{baseUrl}}/api/v1/patients", "host": ["{{baseUrl}}"], "path": ["api","v1","patients"] }
+          },
+          "response": [
+            {
+              "name": "401 — token missing",
+              "status": "Unauthorized",
+              "code": 401,
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\n  \"error\": \"Authentication Failed - buildUnauthorizedError()\",\n  \"message\": \"Authentication token required\",\n  \"statusCode\": 401,\n  \"code\": \"AUTH_001\",\n  \"documentation\": \"https://api.yourdomain.com/docs/errors/AUTH_001\",\n  \"timestamp\": \"2024-01-15T10:30:00.000Z\"\n}"
+            },
+            {
+              "name": "401 — token expired",
+              "status": "Unauthorized",
+              "code": 401,
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\n  \"statusCode\": 401,\n  \"error\": \"Authentication Failed - validateToken()\",\n  \"message\": \"Token has expired\",\n  \"code\": \"AUTH_003\",\n  \"timestamp\": \"2024-01-15T10:30:00.000Z\"\n}"
+            },
+            {
+              "name": "401 — wrong algorithm",
+              "status": "Unauthorized",
+              "code": 401,
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\n  \"statusCode\": 401,\n  \"error\": \"Authentication Failed - validateToken()\",\n  \"message\": \"Unsupported token algorithm\",\n  \"code\": \"AUTH_002\",\n  \"timestamp\": \"2024-01-15T10:30:00.000Z\"\n}"
+            }
+          ]
+        },
+
+        {
+          "name": "403 Forbidden — wrong role",
+          "request": {
+            "method": "DELETE",
+            "url": { "raw": "{{baseUrl}}/api/v1/patients/{{patientId}}", "host": ["{{baseUrl}}"], "path": ["api","v1","patients","{{patientId}}"] }
+          },
+          "response": [
+            {
+              "name": "403 — role too low",
+              "status": "Forbidden",
+              "code": 403,
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\n  \"statusCode\": 403,\n  \"error\": \"Forbidden\",\n  \"message\": \"Role 'nurse' is not authorized. Required: [workspace_owner, system_admin, practice_admin]\",\n  \"code\": \"AUTHZ_002\",\n  \"timestamp\": \"2024-01-15T10:30:00.000Z\"\n}"
+            },
+            {
+              "name": "403 — missing permission",
+              "status": "Forbidden",
+              "code": 403,
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\n  \"statusCode\": 403,\n  \"error\": \"Forbidden\",\n  \"message\": \"Missing required permission(s): [patients:write]\",\n  \"code\": \"AUTHZ_003\",\n  \"timestamp\": \"2024-01-15T10:30:00.000Z\"\n}"
+            }
+          ]
+        },
+
+        {
+          "name": "422 Validation Error",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"firstName\": \"\",\n  \"gender\": \"UNKNOWN\",\n  \"birthDate\": \"not-a-date\"\n}"
+            },
+            "url": { "raw": "{{baseUrl}}/api/v1/patients", "host": ["{{baseUrl}}"], "path": ["api","v1","patients"] }
+          },
+          "response": [
+            {
+              "name": "400 Validation Error (class-validator)",
+              "status": "Bad Request",
+              "code": 400,
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\n  \"statusCode\": 400,\n  \"message\": [\n    \"First name is required\",\n    \"Gender must be one of: MALE, FEMALE, OTHER, UNSPECIFIED\",\n    \"Birth date must be a valid ISO 8601 date string\",\n    \"Last name is required\",\n    \"Workspace ID is required\"\n  ],\n  \"error\": \"Bad Request\"\n}"
+            }
+          ]
+        },
+
+        {
+          "name": "404 Not Found",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{baseUrl}}/api/v1/patients/00000000-0000-0000-0000-000000000000", "host": ["{{baseUrl}}"], "path": ["api","v1","patients","00000000-0000-0000-0000-000000000000"] }
+          },
+          "response": [
+            {
+              "name": "404 — not found",
+              "status": "Not Found",
+              "code": 404,
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\n  \"statusCode\": 404,\n  \"message\": \"Patient with ID 00000000-0000-0000-0000-000000000000 not found\",\n  \"error\": \"Not Found\"\n}"
+            }
+          ]
+        },
+
+        {
+          "name": "409 Conflict — duplicate",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"substance\": \"Penicillin\",\n  \"reaction\": \"Rash\",\n  \"severity\": \"Mild\",\n  \"patientId\": \"{{patientId}}\"\n}"
+            },
+            "url": { "raw": "{{baseUrl}}/api/v1/allergies", "host": ["{{baseUrl}}"], "path": ["api","v1","allergies"] }
+          },
+          "response": [
+            {
+              "name": "409 — duplicate allergen",
+              "status": "Conflict",
+              "code": 409,
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\n  \"statusCode\": 409,\n  \"message\": \"Allergy to Penicillin already recorded for this patient\",\n  \"error\": \"Conflict\"\n}"
+            }
+          ]
+        }
+
+      ]
+    }
+
+  ]
+}

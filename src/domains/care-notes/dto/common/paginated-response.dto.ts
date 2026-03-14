@@ -1,0 +1,23 @@
+import { ApiProperty } from '@nestjs/swagger';
+
+export class PaginationMetaDto {
+  @ApiProperty({ description: 'Total number of items' })
+  total!: number;
+
+  @ApiProperty({ description: 'Current page number' })
+  page!: number;
+
+  @ApiProperty({ description: 'Number of items per page' })
+  limit!: number;
+
+  @ApiProperty({ description: 'Total number of pages' })
+  totalPages!: number;
+}
+
+export class PaginatedMetaResponseDto<T> {
+  @ApiProperty({ description: 'Array of data items', isArray: true })
+  data!: T[];
+
+  @ApiProperty({ description: 'Pagination metadata', type: PaginationMetaDto })
+  meta!: PaginationMetaDto;
+}

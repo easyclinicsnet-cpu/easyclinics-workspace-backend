@@ -1,0 +1,289 @@
+import { Logger } from '@nestjs/common';
+import { AIProvider, CareNoteType } from '../../../common/enums';
+import { IAiGenerationStrategy } from '../interfaces';
+import { ChatCompletion } from 'openai/resources/chat';
+
+/**
+ * Base AI Strategy Abstract Class
+ * Provides common functionality for all AI provider implementations
+ *
+ * Features:
+ * - Retry logic with exponential backoff
+ * - Error handling and logging
+ * - Cost estimation
+ * - Performance monitoring
+ */
+export abstract class BaseAiStrategy implements IAiGenerationStrategy {
+  protected readonly logger: Logger;
+  protected readonly defaultTemperature = 0.7;
+  protected readonly defaultMaxTokens = 2000;
+
+  // Retry configuration
+  protected readonly maxRetries = 3;
+  protected readonly baseDelay = 1000; // 1 second
+  protected readonly maxDelay = 10000; // 10 seconds
+  protected readonly backoffMultiplier = 2;
+
+  constructor(loggerContext: string) {
+    this.logger = new Logger(loggerContext);
+  }
+
+  /**
+   * Transcribe audio file to text
+   * Must be implemented by each provider
+   */
+  abstract transcribeAudio(
+    filePath: string,
+    language?: string,
+  ): Promise<{ text: string }>;
+
+  /**
+   * Generate structured note from transcript
+   * Must be implemented by each provider
+   */
+  abstract generateNote(options: {
+    content: string;
+    noteType: CareNoteType;
+    template?: any;
+    model?: string;
+    temperature?: number;
+    maxTokens?: number;
+  }): Promise<any>;
+
+  /**
+   * Generate structured transcript
+   * Must be implemented by each provider
+   */
+  abstract generateStructuredTranscript(
+    text: string,
+    temperature: number,
+    model: string,
+    context: string,
+  ): Promise<ChatCompletion>;
+
+  /**
+   * Health check for provider
+   * Must be implemented by each provider
+   */
+  abstract healthCheck(): Promise<{
+    healthy: boolean;
+    details?: string;
+  }>;
+
+  /**
+   * Get supported models
+   * Must be implemented by each provider
+   */
+  abstract getSupportedModels(
+    operation: 'transcription' | 'generation',
+  ): string[];
+
+  /**
+   * Get default generation model
+   * Must be implemented by each provider
+   */
+  abstract getDefaultGenerationModel(): string;
+
+  /**
+   * Get provider identifier
+   * Must be implemented by each provider
+   */
+  abstract getProvider(): AIProvider;
+
+  /**
+   * Retry operation with exponential backoff
+   * @param operation Operation to retry
+   * @param operationName Name for logging
+   * @param operationId Unique operation ID
+   * @returns Operation result
+   */
+  protected async retryOperation<T>(
+    operation: () => Promise<T>,
+    operationName: string,
+    operationId: string,
+  ): Promise<T> {
+    let lastError: Error;
+
+    for (let attempt = 1; attempt <= this.maxRetries; attempt++) {
+      try {
+        this.logger.debug(
+          `[${operationId}] Attempting ${operationName} (attempt ${attempt}/${this.maxRetries})`,
+        );
+
+        const result = await operation();
+
+        if (attempt > 1) {
+          this.logger.log(
+            `[${operationId}] ${operationName} succeeded after ${attempt} attempts`,
+          );
+        }
+
+        return result;
+      } catch (error) {
+        lastError = error as Error;
+
+        if (attempt === this.maxRetries) {
+          this.logger.error(
+            `[${operationId}] ${operationName} failed after ${this.maxRetries} attempts`,
+            error.stack,
+          );
+          break;
+        }
+
+        // Calculate delay with exponential backoff
+        const delay = Math.min(
+          this.baseDelay * Math.pow(this.backoffMultiplier, attempt - 1),
+          this.maxDelay,
+        );
+
+        this.logger.warn(
+          `[${operationId}] ${operationName} failed (attempt ${attempt}/${this.maxRetries}), retrying in ${delay}ms`,
+          {
+            error: error.message,
+            attempt,
+            maxRetries: this.maxRetries,
+            delay,
+          },
+        );
+
+        await this.sleep(delay);
+      }
+    }
+
+    throw lastError!;
+  }
+
+  /**
+   * Extract error message from various error types
+   * @param error Error object
+   * @returns Error message string
+   */
+  protected extractErrorMessage(error: any): string {
+    if (typeof error === 'string') {
+      return error;
+    }
+
+    if (error?.message) {
+      return error.message;
+    }
+
+    if (error?.error?.message) {
+      return error.error.message;
+    }
+
+    return JSON.stringify(error);
+  }
+
+  /**
+   * Sleep for specified milliseconds
+   * @param ms Milliseconds to sleep
+   */
+  protected sleep(ms: number): Promise<void> {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  /**
+   * Normalize language code to ISO 639-1 format
+   * @param language Language code (e.g., 'en', 'en-US', 'english')
+   * @returns ISO 639-1 language code
+   */
+  protected normalizeLanguageCode(language?: string): string {
+    if (!language) {
+      return 'en'; // Default to English
+    }
+
+    const lowerLang = language.toLowerCase();
+
+    // Extract first two characters for ISO codes
+    if (lowerLang.includes('-')) {
+      return lowerLang.split('-')[0];
+    }
+
+    // Map common language names to ISO codes
+    const languageMap: Record<string, string> = {
+      english: 'en',
+      spanish: 'es',
+      french: 'fr',
+      german: 'de',
+      italian: 'it',
+      portuguese: 'pt',
+      russian: 'ru',
+      japanese: 'ja',
+      korean: 'ko',
+      chinese: 'zh',
+      arabic: 'ar',
+      hindi: 'hi',
+    };
+
+    return languageMap[lowerLang] || lowerLang.substring(0, 2);
+  }
+
+  /**
+   * Generate unique operation ID for tracking
+   * @returns Unique operation ID
+   */
+  protected generateOperationId(prefix: string = 'op'): string {
+    const timestamp = Date.now();
+    const random = Math.random().toString(36).substring(2, 11);
+    return `${prefix}_${timestamp}_${random}`;
+  }
+
+  /**
+   * Estimate cost for operation (default implementation)
+   * Override in specific providers for accurate pricing
+   *
+   * @param operation Operation type
+   * @param inputSize Input size (tokens/seconds)
+   * @returns Estimated cost in USD
+   */
+  async estimateCost(
+    operation: 'transcription' | 'generation',
+    inputSize: number,
+  ): Promise<number> {
+    // Default placeholder - override in specific strategies
+    this.logger.debug(
+      `Cost estimation not implemented for ${this.getProvider()}`,
+    );
+    return 0;
+  }
+
+  /**
+   * Validate required configuration
+   * @param config Configuration object
+   * @param requiredKeys Required configuration keys
+   * @throws Error if required keys are missing
+   */
+  protected validateConfig(
+    config: Record<string, any>,
+    requiredKeys: string[],
+  ): void {
+    const missing = requiredKeys.filter((key) => !config[key]);
+
+    if (missing.length > 0) {
+      throw new Error(
+        `Missing required configuration: ${missing.join(', ')}`,
+      );
+    }
+  }
+
+  /**
+   * Log performance metrics
+   * @param operationId Operation ID
+   * @param operationName Operation name
+   * @param startTime Start timestamp
+   * @param metadata Additional metadata
+   */
+  protected logPerformance(
+    operationId: string,
+    operationName: string,
+    startTime: number,
+    metadata?: Record<string, any>,
+  ): void {
+    const duration = Date.now() - startTime;
+
+    this.logger.log(`[${operationId}] ${operationName} completed`, {
+      duration: `${duration}ms`,
+      ...metadata,
+    });
+  }
+}

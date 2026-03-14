@@ -1,0 +1,607 @@
+{
+  "info": {
+    "name": "EasyClinics EMR — Appointments API v1",
+    "description": "Complete Postman collection for the EasyClinics EMR Appointments domain.\n\n## Setup\n1. Import this collection\n2. Create an environment (or use Collection Variables below)\n3. Run **🔐 Auth / Get JWT Token** first — the token is auto-saved to `{{token}}`\n4. All subsequent requests inherit `Authorization: Bearer {{token}}`\n\n## Environment Variables\n| Variable | Example | Notes |\n|---|---|---|\n| `baseUrl` | `http://localhost:3000` | API base URL |\n| `token` | *(auto-set by Auth request)* | RS256 JWT |\n| `workspaceId` | `550e8400-e29b-41d4-a716-446655440000` | From JWT claims |\n| `patientId` | `a1b2c3d4-e5f6-7890-abcd-ef1234567890` | Patient UUID |\n| `appointmentId` | *(auto-set after Create)* | Appointment UUID |\n| `insuranceProviderId` | `c3d4e5f6-a7b8-9012-cdef-123456789012` | For INSURANCE flow |\n| `schemeId` | `d4e5f6a7-b8c9-0123-defa-234567890123` | For INSURANCE flow |\n\n## Enums\n\n**AppointmentType**: `INITIAL` · `ROUTINE` · `REVIEW` · `EMERGENCY`\n\n**AppointmentStatus**: `SCHEDULED` · `IN_PROGRESS` · `COMPLETED` · `CANCELLED` · `MISSED`\n\n**PaymentMethodType**: `CASH` · `CREDIT_CARD` · `DEBIT_CARD` · `BANK_TRANSFER` · `CHEQUE` · `INSURANCE` · `MOBILE_MONEY` · `ONLINE` · `HMO` · `CORPORATE` · `VOUCHER` · `OTHER`\n\n## Security\nAll routes are protected by:\n`WorkspaceJwtGuard` → `RolesGuard` → `PermissionsGuard`\n\n| Role group | Roles | Permission needed |\n|---|---|---|\n| VIEWER | read_only, scheduler, doctor, nurse, … | `appointments:read` |\n| WRITE | scheduler, doctor, nurse, practice_admin, … | `appointments:write` |\n| CLINICAL | doctor, nurse, medical_assistant | `appointments:write` |\n| ADMIN | workspace_owner, system_admin, practice_admin | `appointments:delete` |",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+    "_postman_id": "easyclinics-appointments-v1"
+  },
+
+  "variable": [
+    { "key": "baseUrl",             "value": "http://localhost:3000",                        "type": "string" },
+    { "key": "workspaceId",         "value": "550e8400-e29b-41d4-a716-446655440000",         "type": "string" },
+    { "key": "patientId",           "value": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",         "type": "string" },
+    { "key": "appointmentId",       "value": "b8c9d0e1-f2a3-4567-bcde-678901234567",         "type": "string" },
+    { "key": "insuranceProviderId", "value": "c3d4e5f6-a7b8-9012-cdef-123456789012",         "type": "string" },
+    { "key": "schemeId",            "value": "d4e5f6a7-b8c9-0123-defa-234567890123",         "type": "string" },
+    { "key": "token",               "value": "",                                              "type": "string" }
+  ],
+
+  "auth": {
+    "type": "bearer",
+    "bearer": [{ "key": "token", "value": "{{token}}", "type": "string" }]
+  },
+
+  "item": [
+
+    {
+      "name": "🔐 Auth",
+      "description": "Token acquisition. Run **Get JWT Token** first to populate `{{token}}` for all subsequent requests.",
+      "item": [
+        {
+          "name": "Get JWT Token",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "const res = pm.response.json();",
+                  "if (res.access_token) {",
+                  "  pm.collectionVariables.set('token', res.access_token);",
+                  "  console.log('✅ Token saved:', res.access_token.substring(0, 40) + '...');",
+                  "} else {",
+                  "  console.error('❌ No access_token in response', res);",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"admin@easyclinics.com\",\n  \"password\": \"supersecret\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/auth/login",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "auth", "login"]
+            }
+          },
+          "response": [
+            {
+              "name": "200 OK — Token returned",
+              "status": "OK",
+              "code": 200,
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\n  \"access_token\": \"eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ1c2VyLTEyMyIsImVtYWlsIjoiYWRtaW5AZWFzeWNsaW5pY3MuY29tIiwicm9sZSI6IndvcmtzcGFjZV9vd25lciIsIndvcmtzcGFjZUlkIjoiNTUwZTg0MDAtZTI5Yi00MWQ0LWE3MTYtNDQ2NjU1NDQwMDAwIiwiaWF0IjoxNzA5MDAwMDAwLCJleHAiOjE3MDkwMDM2MDB9.SIGNATURE\",\n  \"token_type\": \"Bearer\",\n  \"expires_in\": 3600\n}"
+            }
+          ]
+        }
+      ]
+    },
+
+    {
+      "name": "📅 Appointments",
+      "description": "All appointment endpoints.\nBase path: `{{baseUrl}}/api/v1/appointments`\n\nEndpoints overview:\n- `POST /` — Create appointment (CASH or INSURANCE)\n- `GET /` — List appointments (paginated + filtered)\n- `GET /active` — Active appointments only\n- `GET /:id` — Get single appointment\n- `PATCH /:id` — Update appointment\n- `PATCH /:id/done` — Mark as completed\n- `PATCH /:id/cancel` — Cancel appointment\n- `DELETE /:id` — Soft-delete appointment",
+      "item": [
+
+        {
+          "name": "Create Appointment — Cash",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 201) {",
+                  "  const res = pm.response.json();",
+                  "  if (res.id) {",
+                  "    pm.collectionVariables.set('appointmentId', res.id);",
+                  "    console.log('✅ appointmentId saved:', res.id);",
+                  "  }",
+                  "  pm.test('Status is 201', () => pm.response.to.have.status(201));",
+                  "  pm.test('Has id', () => pm.expect(res.id).to.be.a('string'));",
+                  "  pm.test('Status is SCHEDULED', () => pm.expect(res.status).to.eql('SCHEDULED'));",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type",   "value": "application/json" },
+              { "key": "Idempotency-Key", "value": "appt-cash-{{$guid}}", "description": "Optional — prevents duplicate creation on retry" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"patientId\": \"{{patientId}}\",\n  \"date\": \"2026-03-15\",\n  \"time\": \"09:30\",\n  \"type\": \"INITIAL\",\n  \"paymentMethod\": \"CASH\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/appointments",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "appointments"]
+            },
+            "description": "Create a new appointment with `CASH` payment method.\n\n**Required fields**: `patientId`, `date` (YYYY-MM-DD), `time` (HH:mm), `type`, `paymentMethod`\n\n**Roles**: WRITE_ROLES (`appointments:write`)\n\n**Idempotency**: Supply `Idempotency-Key` header to safely retry without duplicates."
+          },
+          "response": [
+            {
+              "name": "201 Created — Cash appointment",
+              "status": "Created",
+              "code": 201,
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\n  \"id\": \"b8c9d0e1-f2a3-4567-bcde-678901234567\",\n  \"patientId\": \"a1b2c3d4-e5f6-7890-abcd-ef1234567890\",\n  \"userId\": \"user-abc-123\",\n  \"workspaceId\": \"550e8400-e29b-41d4-a716-446655440000\",\n  \"date\": \"2026-03-15\",\n  \"time\": \"09:30\",\n  \"type\": \"INITIAL\",\n  \"status\": \"SCHEDULED\",\n  \"paymentMethod\": \"CASH\",\n  \"isActive\": true,\n  \"hasConsultation\": false,\n  \"consultationId\": null,\n  \"billId\": null,\n  \"patient\": {\n    \"id\": \"a1b2c3d4-e5f6-7890-abcd-ef1234567890\",\n    \"firstName\": \"Amara\",\n    \"lastName\": \"Osei\",\n    \"dateOfBirth\": \"1990-06-14\",\n    \"gender\": \"Female\",\n    \"phone\": \"+233244123456\"\n  },\n  \"createdAt\": \"2026-02-21T08:00:00.000Z\",\n  \"updatedAt\": \"2026-02-21T08:00:00.000Z\"\n}"
+            },
+            {
+              "name": "409 Conflict — Idempotent duplicate",
+              "status": "Conflict",
+              "code": 409,
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\n  \"statusCode\": 409,\n  \"message\": \"Duplicate request: appointment already created with this idempotency key\",\n  \"error\": \"Conflict\"\n}"
+            }
+          ]
+        },
+
+        {
+          "name": "Create Appointment — Insurance",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 201) {",
+                  "  const res = pm.response.json();",
+                  "  pm.collectionVariables.set('appointmentId', res.id);",
+                  "  pm.test('Status is 201', () => pm.response.to.have.status(201));",
+                  "  pm.test('paymentMethod is INSURANCE', () => pm.expect(res.paymentMethod).to.eql('INSURANCE'));",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type",   "value": "application/json" },
+              { "key": "Idempotency-Key", "value": "appt-ins-{{$guid}}", "description": "Optional idempotency key" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"patientId\": \"{{patientId}}\",\n  \"date\": \"2026-03-15\",\n  \"time\": \"11:00\",\n  \"type\": \"REVIEW\",\n  \"paymentMethod\": \"INSURANCE\",\n  \"insuranceProviderId\": \"{{insuranceProviderId}}\",\n  \"schemeId\": \"{{schemeId}}\",\n  \"membershipNumber\": \"INS-2026-00112\",\n  \"memberType\": \"PRINCIPAL\",\n  \"updatePatientInsurance\": false\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/appointments",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "appointments"]
+            },
+            "description": "Create an appointment with `INSURANCE` payment method.\n\nWhen `paymentMethod = INSURANCE`, these fields become **required**:\n- `insuranceProviderId` (UUID)\n- `schemeId` (UUID)\n- `membershipNumber` (string)\n- `memberType`: `PRINCIPAL` | `DEPENDENT`\n\nOptional: `updatePatientInsurance: true` will sync the insurance details to the patient's record.\n\n**Roles**: WRITE_ROLES (`appointments:write`)"
+          },
+          "response": [
+            {
+              "name": "201 Created — Insurance appointment",
+              "status": "Created",
+              "code": 201,
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\n  \"id\": \"e9d0c1b2-a3f4-5678-cdef-789012345678\",\n  \"patientId\": \"a1b2c3d4-e5f6-7890-abcd-ef1234567890\",\n  \"userId\": \"user-abc-123\",\n  \"workspaceId\": \"550e8400-e29b-41d4-a716-446655440000\",\n  \"date\": \"2026-03-15\",\n  \"time\": \"11:00\",\n  \"type\": \"REVIEW\",\n  \"status\": \"SCHEDULED\",\n  \"paymentMethod\": \"INSURANCE\",\n  \"isActive\": true,\n  \"hasConsultation\": false,\n  \"consultationId\": null,\n  \"billId\": null,\n  \"patient\": {\n    \"id\": \"a1b2c3d4-e5f6-7890-abcd-ef1234567890\",\n    \"firstName\": \"Amara\",\n    \"lastName\": \"Osei\",\n    \"dateOfBirth\": \"1990-06-14\",\n    \"gender\": \"Female\",\n    \"phone\": \"+233244123456\"\n  },\n  \"createdAt\": \"2026-02-21T08:05:00.000Z\",\n  \"updatedAt\": \"2026-02-21T08:05:00.000Z\"\n}"
+            },
+            {
+              "name": "400 Bad Request — Missing insurance fields",
+              "status": "Bad Request",
+              "code": 400,
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\n  \"statusCode\": 400,\n  \"message\": [\n    \"insuranceProviderId must be a UUID\",\n    \"schemeId must be a UUID\",\n    \"membershipNumber should not be empty\",\n    \"memberType must be one of the following values: PRINCIPAL, DEPENDENT\"\n  ],\n  \"error\": \"Bad Request\"\n}"
+            }
+          ]
+        },
+
+        {
+          "name": "List Appointments",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status is 200', () => pm.response.to.have.status(200));",
+                  "const res = pm.response.json();",
+                  "pm.test('Has data array', () => pm.expect(res.data).to.be.an('array'));",
+                  "pm.test('Has meta object', () => pm.expect(res.meta).to.be.an('object'));",
+                  "pm.test('meta has total', () => pm.expect(res.meta.total).to.be.a('number'));"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/appointments?page=1&limit=10&status=SCHEDULED&type=INITIAL&sortBy=date&sortDirection=DESC&isActive=true&includeCancelled=false",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "appointments"],
+              "query": [
+                { "key": "page",             "value": "1",          "description": "Page number (default: 1)" },
+                { "key": "limit",            "value": "10",         "description": "Results per page (default: 10, max: 100)" },
+                { "key": "status",           "value": "SCHEDULED",  "description": "Filter by AppointmentStatus: SCHEDULED | IN_PROGRESS | COMPLETED | CANCELLED | MISSED" },
+                { "key": "type",             "value": "INITIAL",    "description": "Filter by AppointmentType: INITIAL | ROUTINE | REVIEW | EMERGENCY" },
+                { "key": "date",             "value": null,         "description": "Exact date filter (YYYY-MM-DD)", "disabled": true },
+                { "key": "startDate",        "value": null,         "description": "Date range start (YYYY-MM-DD)", "disabled": true },
+                { "key": "endDate",          "value": null,         "description": "Date range end (YYYY-MM-DD)", "disabled": true },
+                { "key": "patientId",        "value": null,         "description": "Filter by patient UUID", "disabled": true },
+                { "key": "practitionerId",   "value": null,         "description": "Filter by practitioner UUID", "disabled": true },
+                { "key": "search",           "value": null,         "description": "Full-text search", "disabled": true },
+                { "key": "includeCancelled", "value": "false",      "description": "Include CANCELLED appointments (default: false)" },
+                { "key": "sortBy",           "value": "date",       "description": "Sort field: date | createdAt (default: date)" },
+                { "key": "sortDirection",    "value": "DESC",       "description": "Sort direction: ASC | DESC (default: DESC)" },
+                { "key": "isActive",         "value": "true",       "description": "Only active records (default: true)" }
+              ]
+            },
+            "description": "List all appointments for the authenticated workspace with pagination and filtering.\n\n**Roles**: VIEWER_ROLES (`appointments:read`)\n\n**Default**: page=1, limit=10, isActive=true, includeCancelled=false, sortBy=date, sortDirection=DESC"
+          },
+          "response": [
+            {
+              "name": "200 OK — Paginated list",
+              "status": "OK",
+              "code": 200,
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\n  \"data\": [\n    {\n      \"id\": \"b8c9d0e1-f2a3-4567-bcde-678901234567\",\n      \"patientId\": \"a1b2c3d4-e5f6-7890-abcd-ef1234567890\",\n      \"userId\": \"user-abc-123\",\n      \"workspaceId\": \"550e8400-e29b-41d4-a716-446655440000\",\n      \"date\": \"2026-03-15\",\n      \"time\": \"09:30\",\n      \"type\": \"INITIAL\",\n      \"status\": \"SCHEDULED\",\n      \"paymentMethod\": \"CASH\",\n      \"isActive\": true,\n      \"hasConsultation\": false,\n      \"consultationId\": null,\n      \"billId\": null,\n      \"patient\": {\n        \"id\": \"a1b2c3d4-e5f6-7890-abcd-ef1234567890\",\n        \"firstName\": \"Amara\",\n        \"lastName\": \"Osei\",\n        \"dateOfBirth\": \"1990-06-14\",\n        \"gender\": \"Female\",\n        \"phone\": \"+233244123456\"\n      },\n      \"createdAt\": \"2026-02-21T08:00:00.000Z\",\n      \"updatedAt\": \"2026-02-21T08:00:00.000Z\"\n    },\n    {\n      \"id\": \"e9d0c1b2-a3f4-5678-cdef-789012345678\",\n      \"patientId\": \"a1b2c3d4-e5f6-7890-abcd-ef1234567890\",\n      \"userId\": \"user-abc-123\",\n      \"workspaceId\": \"550e8400-e29b-41d4-a716-446655440000\",\n      \"date\": \"2026-03-15\",\n      \"time\": \"11:00\",\n      \"type\": \"REVIEW\",\n      \"status\": \"SCHEDULED\",\n      \"paymentMethod\": \"INSURANCE\",\n      \"isActive\": true,\n      \"hasConsultation\": false,\n      \"consultationId\": null,\n      \"billId\": null,\n      \"patient\": {\n        \"id\": \"a1b2c3d4-e5f6-7890-abcd-ef1234567890\",\n        \"firstName\": \"Amara\",\n        \"lastName\": \"Osei\",\n        \"dateOfBirth\": \"1990-06-14\",\n        \"gender\": \"Female\",\n        \"phone\": \"+233244123456\"\n      },\n      \"createdAt\": \"2026-02-21T08:05:00.000Z\",\n      \"updatedAt\": \"2026-02-21T08:05:00.000Z\"\n    }\n  ],\n  \"meta\": {\n    \"total\": 2,\n    \"page\": 1,\n    \"limit\": 10,\n    \"totalPages\": 1\n  }\n}"
+            }
+          ]
+        },
+
+        {
+          "name": "List Active Appointments",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status is 200', () => pm.response.to.have.status(200));",
+                  "const res = pm.response.json();",
+                  "pm.test('Has data array', () => pm.expect(res.data).to.be.an('array'));",
+                  "pm.test('All appointments are active', () => {",
+                  "  res.data.forEach(a => pm.expect(a.isActive).to.be.true);",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/appointments/active?page=1&limit=10",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "appointments", "active"],
+              "query": [
+                { "key": "page",  "value": "1",  "description": "Page number" },
+                { "key": "limit", "value": "10", "description": "Results per page" }
+              ]
+            },
+            "description": "Returns only active (non-deleted, non-cancelled) appointments for the workspace.\nConvenience endpoint — equivalent to `GET /?isActive=true&includeCancelled=false`.\n\n**Roles**: VIEWER_ROLES (`appointments:read`)"
+          },
+          "response": [
+            {
+              "name": "200 OK — Active appointments",
+              "status": "OK",
+              "code": 200,
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\n  \"data\": [\n    {\n      \"id\": \"b8c9d0e1-f2a3-4567-bcde-678901234567\",\n      \"patientId\": \"a1b2c3d4-e5f6-7890-abcd-ef1234567890\",\n      \"userId\": \"user-abc-123\",\n      \"workspaceId\": \"550e8400-e29b-41d4-a716-446655440000\",\n      \"date\": \"2026-03-15\",\n      \"time\": \"09:30\",\n      \"type\": \"INITIAL\",\n      \"status\": \"SCHEDULED\",\n      \"paymentMethod\": \"CASH\",\n      \"isActive\": true,\n      \"hasConsultation\": false,\n      \"consultationId\": null,\n      \"billId\": null,\n      \"patient\": {\n        \"id\": \"a1b2c3d4-e5f6-7890-abcd-ef1234567890\",\n        \"firstName\": \"Amara\",\n        \"lastName\": \"Osei\",\n        \"dateOfBirth\": \"1990-06-14\",\n        \"gender\": \"Female\",\n        \"phone\": \"+233244123456\"\n      },\n      \"createdAt\": \"2026-02-21T08:00:00.000Z\",\n      \"updatedAt\": \"2026-02-21T08:00:00.000Z\"\n    }\n  ],\n  \"meta\": {\n    \"total\": 1,\n    \"page\": 1,\n    \"limit\": 10,\n    \"totalPages\": 1\n  }\n}"
+            }
+          ]
+        },
+
+        {
+          "name": "Get Appointment by ID",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status is 200', () => pm.response.to.have.status(200));",
+                  "const res = pm.response.json();",
+                  "pm.test('id matches variable', () => pm.expect(res.id).to.eql(pm.collectionVariables.get('appointmentId')));",
+                  "pm.test('Has patient object', () => pm.expect(res.patient).to.be.an('object'));"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/appointments/{{appointmentId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "appointments", "{{appointmentId}}"]
+            },
+            "description": "Retrieve a single appointment by its UUID, including the nested patient object.\n\n**Roles**: VIEWER_ROLES (`appointments:read`)"
+          },
+          "response": [
+            {
+              "name": "200 OK — Appointment detail",
+              "status": "OK",
+              "code": 200,
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\n  \"id\": \"b8c9d0e1-f2a3-4567-bcde-678901234567\",\n  \"patientId\": \"a1b2c3d4-e5f6-7890-abcd-ef1234567890\",\n  \"userId\": \"user-abc-123\",\n  \"workspaceId\": \"550e8400-e29b-41d4-a716-446655440000\",\n  \"date\": \"2026-03-15\",\n  \"time\": \"09:30\",\n  \"type\": \"INITIAL\",\n  \"status\": \"SCHEDULED\",\n  \"paymentMethod\": \"CASH\",\n  \"isActive\": true,\n  \"hasConsultation\": false,\n  \"consultationId\": null,\n  \"billId\": null,\n  \"patient\": {\n    \"id\": \"a1b2c3d4-e5f6-7890-abcd-ef1234567890\",\n    \"firstName\": \"Amara\",\n    \"lastName\": \"Osei\",\n    \"dateOfBirth\": \"1990-06-14\",\n    \"gender\": \"Female\",\n    \"phone\": \"+233244123456\"\n  },\n  \"createdAt\": \"2026-02-21T08:00:00.000Z\",\n  \"updatedAt\": \"2026-02-21T08:00:00.000Z\"\n}"
+            },
+            {
+              "name": "404 Not Found",
+              "status": "Not Found",
+              "code": 404,
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\n  \"statusCode\": 404,\n  \"message\": \"Appointment not found\",\n  \"error\": \"Not Found\"\n}"
+            }
+          ]
+        },
+
+        {
+          "name": "Update Appointment",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status is 200', () => pm.response.to.have.status(200));",
+                  "const res = pm.response.json();",
+                  "pm.test('time updated', () => pm.expect(res.time).to.eql('10:00'));",
+                  "pm.test('type updated', () => pm.expect(res.type).to.eql('ROUTINE'));"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "PATCH",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"date\": \"2026-03-15\",\n  \"time\": \"10:00\",\n  \"type\": \"ROUTINE\",\n  \"paymentMethod\": \"CASH\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/appointments/{{appointmentId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "appointments", "{{appointmentId}}"]
+            },
+            "description": "Partially update an appointment (all fields optional — only provided fields are changed).\n\nTo switch to insurance, include the same insurance fields as in **Create — Insurance**.\n\n**Roles**: WRITE_ROLES (`appointments:write`)\n\n**Note**: Cannot update appointments that are already COMPLETED or CANCELLED."
+          },
+          "response": [
+            {
+              "name": "200 OK — Updated appointment",
+              "status": "OK",
+              "code": 200,
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\n  \"id\": \"b8c9d0e1-f2a3-4567-bcde-678901234567\",\n  \"patientId\": \"a1b2c3d4-e5f6-7890-abcd-ef1234567890\",\n  \"userId\": \"user-abc-123\",\n  \"workspaceId\": \"550e8400-e29b-41d4-a716-446655440000\",\n  \"date\": \"2026-03-15\",\n  \"time\": \"10:00\",\n  \"type\": \"ROUTINE\",\n  \"status\": \"SCHEDULED\",\n  \"paymentMethod\": \"CASH\",\n  \"isActive\": true,\n  \"hasConsultation\": false,\n  \"consultationId\": null,\n  \"billId\": null,\n  \"patient\": {\n    \"id\": \"a1b2c3d4-e5f6-7890-abcd-ef1234567890\",\n    \"firstName\": \"Amara\",\n    \"lastName\": \"Osei\",\n    \"dateOfBirth\": \"1990-06-14\",\n    \"gender\": \"Female\",\n    \"phone\": \"+233244123456\"\n  },\n  \"createdAt\": \"2026-02-21T08:00:00.000Z\",\n  \"updatedAt\": \"2026-02-21T09:15:00.000Z\"\n}"
+            },
+            {
+              "name": "400 Bad Request — Validation error",
+              "status": "Bad Request",
+              "code": 400,
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\n  \"statusCode\": 400,\n  \"message\": [\"time must match /^([01]\\\\d|2[0-3]):[0-5]\\\\d$/ regular expression\"],\n  \"error\": \"Bad Request\"\n}"
+            }
+          ]
+        },
+
+        {
+          "name": "Mark Appointment as Done",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status is 200', () => pm.response.to.have.status(200));",
+                  "const res = pm.response.json();",
+                  "pm.test('status is COMPLETED', () => pm.expect(res.status).to.eql('COMPLETED'));"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "PATCH",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/appointments/{{appointmentId}}/done",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "appointments", "{{appointmentId}}", "done"]
+            },
+            "description": "Mark an appointment as **COMPLETED**. No request body required.\n\nTypically called by clinical staff after the patient's visit is finished.\n\n**Roles**: CLINICAL_ROLES — doctor, nurse, medical_assistant (`appointments:write`)"
+          },
+          "response": [
+            {
+              "name": "200 OK — Appointment completed",
+              "status": "OK",
+              "code": 200,
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\n  \"id\": \"b8c9d0e1-f2a3-4567-bcde-678901234567\",\n  \"patientId\": \"a1b2c3d4-e5f6-7890-abcd-ef1234567890\",\n  \"userId\": \"user-abc-123\",\n  \"workspaceId\": \"550e8400-e29b-41d4-a716-446655440000\",\n  \"date\": \"2026-03-15\",\n  \"time\": \"10:00\",\n  \"type\": \"ROUTINE\",\n  \"status\": \"COMPLETED\",\n  \"paymentMethod\": \"CASH\",\n  \"isActive\": true,\n  \"hasConsultation\": true,\n  \"consultationId\": \"f0e1d2c3-b4a5-6789-def0-123456789abc\",\n  \"billId\": \"a0b1c2d3-e4f5-6789-abcd-ef0123456789\",\n  \"patient\": {\n    \"id\": \"a1b2c3d4-e5f6-7890-abcd-ef1234567890\",\n    \"firstName\": \"Amara\",\n    \"lastName\": \"Osei\",\n    \"dateOfBirth\": \"1990-06-14\",\n    \"gender\": \"Female\",\n    \"phone\": \"+233244123456\"\n  },\n  \"createdAt\": \"2026-02-21T08:00:00.000Z\",\n  \"updatedAt\": \"2026-02-21T10:45:00.000Z\"\n}"
+            },
+            {
+              "name": "404 Not Found",
+              "status": "Not Found",
+              "code": 404,
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\n  \"statusCode\": 404,\n  \"message\": \"Appointment not found\",\n  \"error\": \"Not Found\"\n}"
+            }
+          ]
+        },
+
+        {
+          "name": "Cancel Appointment",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status is 200', () => pm.response.to.have.status(200));",
+                  "const res = pm.response.json();",
+                  "pm.test('status is CANCELLED', () => pm.expect(res.status).to.eql('CANCELLED'));"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "PATCH",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/appointments/{{appointmentId}}/cancel",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "appointments", "{{appointmentId}}", "cancel"]
+            },
+            "description": "Cancel a **SCHEDULED** or **IN_PROGRESS** appointment. No request body required.\n\nThe appointment record is kept but `status` changes to `CANCELLED`.\nUse **Delete** to fully soft-delete the record.\n\n**Roles**: WRITE_ROLES (`appointments:write`)"
+          },
+          "response": [
+            {
+              "name": "200 OK — Appointment cancelled",
+              "status": "OK",
+              "code": 200,
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\n  \"id\": \"b8c9d0e1-f2a3-4567-bcde-678901234567\",\n  \"patientId\": \"a1b2c3d4-e5f6-7890-abcd-ef1234567890\",\n  \"userId\": \"user-abc-123\",\n  \"workspaceId\": \"550e8400-e29b-41d4-a716-446655440000\",\n  \"date\": \"2026-03-15\",\n  \"time\": \"10:00\",\n  \"type\": \"ROUTINE\",\n  \"status\": \"CANCELLED\",\n  \"paymentMethod\": \"CASH\",\n  \"isActive\": false,\n  \"hasConsultation\": false,\n  \"consultationId\": null,\n  \"billId\": null,\n  \"patient\": {\n    \"id\": \"a1b2c3d4-e5f6-7890-abcd-ef1234567890\",\n    \"firstName\": \"Amara\",\n    \"lastName\": \"Osei\",\n    \"dateOfBirth\": \"1990-06-14\",\n    \"gender\": \"Female\",\n    \"phone\": \"+233244123456\"\n  },\n  \"createdAt\": \"2026-02-21T08:00:00.000Z\",\n  \"updatedAt\": \"2026-02-21T11:30:00.000Z\"\n}"
+            }
+          ]
+        },
+
+        {
+          "name": "Delete Appointment (Soft)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status is 204', () => pm.response.to.have.status(204));",
+                  "pm.test('Body is empty', () => pm.expect(pm.response.text()).to.be.empty);"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/appointments/{{appointmentId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "appointments", "{{appointmentId}}"]
+            },
+            "description": "Soft-delete an appointment. Sets `isDeleted = true` and `isActive = false`. The record is **not** physically removed from the database.\n\n**Returns**: `204 No Content` (empty body)\n\n**Roles**: ADMIN_ROLES — workspace_owner, system_admin, practice_admin (`appointments:delete`)"
+          },
+          "response": [
+            {
+              "name": "204 No Content — Deleted",
+              "status": "No Content",
+              "code": 204,
+              "header": [],
+              "body": ""
+            },
+            {
+              "name": "403 Forbidden — Insufficient role",
+              "status": "Forbidden",
+              "code": 403,
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\n  \"statusCode\": 403,\n  \"message\": \"Forbidden resource\",\n  \"error\": \"Forbidden\"\n}"
+            },
+            {
+              "name": "404 Not Found",
+              "status": "Not Found",
+              "code": 404,
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\n  \"statusCode\": 404,\n  \"message\": \"Appointment not found\",\n  \"error\": \"Not Found\"\n}"
+            }
+          ]
+        }
+
+      ]
+    },
+
+    {
+      "name": "🔎 Query Examples",
+      "description": "Pre-built query combinations for common use-cases. Ready to run after authentication.",
+      "item": [
+
+        {
+          "name": "Today's Scheduled Appointments",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/appointments?status=SCHEDULED&date=2026-02-21&sortBy=time&sortDirection=ASC&limit=50",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "appointments"],
+              "query": [
+                { "key": "status",        "value": "SCHEDULED" },
+                { "key": "date",          "value": "2026-02-21", "description": "Change to today's date" },
+                { "key": "sortBy",        "value": "time" },
+                { "key": "sortDirection", "value": "ASC" },
+                { "key": "limit",         "value": "50" }
+              ]
+            },
+            "description": "All scheduled appointments for today, sorted by time ascending (appointment order of the day)."
+          },
+          "response": []
+        },
+
+        {
+          "name": "Appointments for a Specific Patient",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/appointments?patientId={{patientId}}&includeCancelled=true&sortBy=date&sortDirection=DESC&limit=20",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "appointments"],
+              "query": [
+                { "key": "patientId",        "value": "{{patientId}}" },
+                { "key": "includeCancelled", "value": "true" },
+                { "key": "sortBy",           "value": "date" },
+                { "key": "sortDirection",    "value": "DESC" },
+                { "key": "limit",            "value": "20" }
+              ]
+            },
+            "description": "Full appointment history for a specific patient, newest first, including cancelled."
+          },
+          "response": []
+        },
+
+        {
+          "name": "Emergency Appointments This Week",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/appointments?type=EMERGENCY&startDate=2026-02-16&endDate=2026-02-22&includeCancelled=false",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "appointments"],
+              "query": [
+                { "key": "type",             "value": "EMERGENCY" },
+                { "key": "startDate",        "value": "2026-02-16" },
+                { "key": "endDate",          "value": "2026-02-22" },
+                { "key": "includeCancelled", "value": "false" }
+              ]
+            },
+            "description": "All emergency appointments in the current week."
+          },
+          "response": []
+        },
+
+        {
+          "name": "Insurance Appointments — Pending",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/appointments?status=SCHEDULED&search=INSURANCE&limit=100",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "appointments"],
+              "query": [
+                { "key": "status", "value": "SCHEDULED" },
+                { "key": "limit",  "value": "100" }
+              ]
+            },
+            "description": "Scheduled appointments — review and filter client-side for `paymentMethod = INSURANCE`."
+          },
+          "response": []
+        }
+
+      ]
+    }
+
+  ]
+}

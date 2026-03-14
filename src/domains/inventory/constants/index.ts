@@ -1,0 +1,77 @@
+/**
+ * Inventory Domain Constants
+ */
+
+export const INVENTORY_CONSTANTS = {
+  STOCK_THRESHOLDS: {
+    LOW_STOCK_PERCENTAGE: 0.2,
+    CRITICAL_STOCK_PERCENTAGE: 0.1,
+    OVERSTOCK_MULTIPLIER: 3,
+  },
+
+  DEFAULTS: {
+    REORDER_QUANTITY: 100,
+    PAGE_SIZE: 25,
+    MAX_PAGE_SIZE: 100,
+    BATCH_SIZE: 100,
+  },
+
+  EXPIRY: {
+    WARNING_DAYS: 30,
+    CRITICAL_DAYS: 15,
+    RETENTION_DAYS: 730,
+  },
+
+  BARCODE_PREFIX: {
+    MEDICATION: 'MED',
+    CONSUMABLE: 'CON',
+    EQUIPMENT: 'EQP',
+  },
+
+  CACHE: {
+    TTL_MS: 300_000, // 5 minutes
+    MAX_ENTRIES: 100,
+    IDEMPOTENCY_TTL_MS: 300_000, // 5 minutes
+  },
+} as const;
+
+export const MOVEMENT_DIRECTION = {
+  INBOUND: 1,
+  OUTBOUND: -1,
+} as const;
+
+export const INBOUND_MOVEMENT_TYPES = [
+  'RECEIPT',
+  'RETURN',
+  'ADJUSTMENT_IN',
+  'TRANSFER_IN',
+  'DONATION_IN',
+  'MANUFACTURE',
+  'RESERVATION_RELEASE',
+  'UNRESERVATION',
+] as const;
+
+export const OUTBOUND_MOVEMENT_TYPES = [
+  'DISPENSE',
+  'PARTIAL_DISPENSE',
+  'ADJUSTMENT_OUT',
+  'TRANSFER_OUT',
+  'DAMAGED',
+  'LOSS',
+  'EXPIRED',
+  'THEFT',
+  'DONATION_OUT',
+  'INTERNAL_USE',
+  'SERVICE',
+  'EMERGENCY_DISPENSE',
+  'RESERVATION',
+] as const;
+
+export const STERILE_DEPARTMENTS = [
+  'SURGERY',
+  'ICU',
+  'ER',
+  'NICU',
+  'OPERATING_THEATRE',
+  'EMERGENCY',
+] as const;

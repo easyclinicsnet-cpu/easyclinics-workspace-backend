@@ -1,0 +1,380 @@
+/**
+ * SickNoteController — v1
+ *
+ * Full lifecycle management for medical sick notes / work-absence certificates.
+ *
+ * ┌─ Contract ─────────────────────────────────────────────────────────────────┐
+ * │  workspaceId / userId are ALWAYS extracted from the verified JWT           │
+ * └────────────────────────────────────────────────────────────────────────────┘
+ *
+ * ┌─ Route map ────────────────────────────────────────────────────────────────┐
+ * │  GET    /sick-notes                    — list all (filterable, paginated)  │
+ * │  GET    /sick-notes/active             — ISSUED with endDate in future     │
+ * │  GET    /sick-notes/expiring           — ISSUED expiring within N days     │
+ * │  GET    /sick-notes/patient/:patientId — all notes for a patient           │
+ * │  GET    /sick-notes/:id                — single record                     │
+ * │  POST   /sick-notes                    — create (DRAFT)                    │
+ * │  PATCH  /sick-notes/:id                — update (DRAFT only)               │
+ * │  POST   /sick-notes/:id/issue          — DRAFT → ISSUED                    │
+ * │  POST   /sick-notes/:id/cancel         — DRAFT|ISSUED → CANCELLED          │
+ * │  POST   /sick-notes/:id/extend         — create extension note             │
+ * │  POST   /sick-notes/:id/expire         — ISSUED → EXPIRED (manual)         │
+ * │  DELETE /sick-notes/:id                — soft delete                       │
+ * │  POST   /sick-notes/:id/restore        — restore soft-deleted              │
+ * └────────────────────────────────────────────────────────────────────────────┘
+ */
+
+import {
+  Controller,
+  Get,
+  Post,
+  Patch,
+  Delete,
+  Param,
+  Query,
+  Body,
+  Req,
+  HttpCode,
+  HttpStatus,
+  UseGuards,
+  ParseUUIDPipe,
+  ParseIntPipe,
+  DefaultValuePipe,
+} from '@nestjs/common';
+import {
+  ApiTags,
+  ApiBearerAuth,
+  ApiSecurity,
+  ApiOperation,
+  ApiResponse,
+  ApiParam,
+  ApiQuery,
+  ApiExtraModels,
+} from '@nestjs/swagger';
+import { Request } from 'express';
+
+import { WorkspaceJwtGuard }  from '../../../common/security/auth/workspace-jwt.guard';
+import { RolesGuard }         from '../../../common/security/auth/roles.guard';
+import { PermissionsGuard }   from '../../../common/security/auth/permissions.guard';
+import { Roles }              from '../../../common/security/auth/decorators';
+import { UserRole }           from '../../../common/enums';
+
+import { SickNoteService }    from '../services/sick-note.service';
+import {
+  CreateSickNoteDto,
+  UpdateSickNoteDto,
+  SickNoteQueryDto,
+  SickNoteResponseDto,
+  ExtendSickNoteDto,
+  CancelSickNoteDto,
+} from '../dto';
+
+// ---------------------------------------------------------------------------
+// Role shorthand groups
+// ---------------------------------------------------------------------------
+
+/** All clinical + admin staff may read sick notes */
+const ALL_CLINICAL_ROLES = [
+  UserRole.WORKSPACE_OWNER,
+  UserRole.SYSTEM_ADMIN,
+  UserRole.PRACTICE_ADMIN,
+  UserRole.DOCTOR,
+  UserRole.NURSE,
+  UserRole.MEDICAL_ASSISTANT,
+  UserRole.THERAPIST,
+  UserRole.LAB_TECHNICIAN,
+  UserRole.BILLING_STAFF,
+  UserRole.READ_ONLY,
+];
+
+/** Only clinical staff who can create/sign clinical documents */
+const CLINICAL_WRITE_ROLES = [
+  UserRole.WORKSPACE_OWNER,
+  UserRole.SYSTEM_ADMIN,
+  UserRole.PRACTICE_ADMIN,
+  UserRole.DOCTOR,
+  UserRole.NURSE,
+];
+
+// ---------------------------------------------------------------------------
+
+@ApiTags('Sick Notes')
+@ApiBearerAuth('JWT')
+@ApiSecurity('WorkspaceId')
+@UseGuards(WorkspaceJwtGuard, RolesGuard, PermissionsGuard)
+@ApiExtraModels(SickNoteResponseDto)
+@Controller({ path: 'sick-notes', version: 'v1' })
+export class SickNoteController {
+  constructor(private readonly service: SickNoteService) {}
+
+  // ── LIST / SEARCH ──────────────────────────────────────────────────────────
+
+  @Get()
+  @Roles(...ALL_CLINICAL_ROLES)
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    operationId: 'sickNotes_findAll',
+    summary:     'List sick notes',
+    description: 'Returns a paginated list of sick notes for the workspace, with optional filters.',
+  })
+  @ApiResponse({ status: 200, description: 'Paginated sick notes' })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  findAll(
+    @Query() query: SickNoteQueryDto,
+    @Req()   req:   Request,
+  ) {
+    return this.service.findAll(query, req.workspaceId);
+  }
+
+  // ── SPECIAL QUERY ROUTES (must be declared before /:id) ───────────────────
+
+  @Get('active')
+  @Roles(...ALL_CLINICAL_ROLES)
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    operationId: 'sickNotes_findActive',
+    summary:     'List active sick notes',
+    description: 'Returns ISSUED sick notes whose endDate has not yet passed.',
+  })
+  @ApiQuery({ name: 'page',  required: false, type: Number })
+  @ApiQuery({ name: 'limit', required: false, type: Number })
+  @ApiResponse({ status: 200, description: 'Paginated active sick notes' })
+  findActive(
+    @Query('page',  new DefaultValuePipe(1),  ParseIntPipe) page:  number,
+    @Query('limit', new DefaultValuePipe(20), ParseIntPipe) limit: number,
+    @Req() req: Request,
+  ) {
+    return this.service.findActive(req.workspaceId, page, limit);
+  }
+
+  @Get('expiring')
+  @Roles(...ALL_CLINICAL_ROLES)
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    operationId: 'sickNotes_findExpiring',
+    summary:     'List sick notes expiring soon',
+    description: 'Returns ISSUED sick notes whose endDate falls within the next N days.',
+  })
+  @ApiQuery({ name: 'days',  required: false, type: Number, description: 'Look-ahead window in days (default 7)' })
+  @ApiQuery({ name: 'page',  required: false, type: Number })
+  @ApiQuery({ name: 'limit', required: false, type: Number })
+  @ApiResponse({ status: 200, description: 'Paginated expiring sick notes' })
+  findExpiring(
+    @Query('days',  new DefaultValuePipe(7),  ParseIntPipe) days:  number,
+    @Query('page',  new DefaultValuePipe(1),  ParseIntPipe) page:  number,
+    @Query('limit', new DefaultValuePipe(20), ParseIntPipe) limit: number,
+    @Req() req: Request,
+  ) {
+    return this.service.findExpiring(req.workspaceId, days, page, limit);
+  }
+
+  @Get('patient/:patientId')
+  @Roles(...ALL_CLINICAL_ROLES)
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    operationId: 'sickNotes_findByPatient',
+    summary:     'List sick notes for a patient',
+    description: 'Returns all sick notes for the specified patient, ordered by creation date descending.',
+  })
+  @ApiParam({ name: 'patientId', description: 'Patient UUID', type: String })
+  @ApiQuery({ name: 'page',  required: false, type: Number })
+  @ApiQuery({ name: 'limit', required: false, type: Number })
+  @ApiResponse({ status: 200, description: 'Paginated sick notes for patient' })
+  @ApiResponse({ status: 404, description: 'Patient not found' })
+  findByPatient(
+    @Param('patientId', ParseUUIDPipe) patientId: string,
+    @Query('page',  new DefaultValuePipe(1),  ParseIntPipe) page:  number,
+    @Query('limit', new DefaultValuePipe(20), ParseIntPipe) limit: number,
+    @Req() req: Request,
+  ) {
+    return this.service.findByPatient(patientId, req.workspaceId, page, limit);
+  }
+
+  // ── SINGLE RECORD ──────────────────────────────────────────────────────────
+
+  @Get(':id')
+  @Roles(...ALL_CLINICAL_ROLES)
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    operationId: 'sickNotes_findOne',
+    summary:     'Get a sick note by ID',
+  })
+  @ApiParam({ name: 'id', description: 'Sick note UUID', type: String })
+  @ApiResponse({ status: 200, type: SickNoteResponseDto })
+  @ApiResponse({ status: 404, description: 'Not found' })
+  findOne(
+    @Param('id', ParseUUIDPipe) id:  string,
+    @Req()                      req: Request,
+  ) {
+    return this.service.findOne(id, req.workspaceId);
+  }
+
+  // ── CREATE ─────────────────────────────────────────────────────────────────
+
+  @Post()
+  @Roles(...CLINICAL_WRITE_ROLES)
+  @HttpCode(HttpStatus.CREATED)
+  @ApiOperation({
+    operationId: 'sickNotes_create',
+    summary:     'Create a sick note (DRAFT)',
+    description:
+      'Creates a new sick note in DRAFT status. ' +
+      'Use POST /sick-notes/:id/issue to formally issue it with a certificate number.',
+  })
+  @ApiResponse({ status: 201, type: SickNoteResponseDto })
+  @ApiResponse({ status: 400, description: 'Invalid dates' })
+  @ApiResponse({ status: 404, description: 'Patient not found' })
+  create(
+    @Body() dto: CreateSickNoteDto,
+    @Req()  req: Request,
+  ) {
+    return this.service.create(dto, req.userId, req.workspaceId);
+  }
+
+  // ── UPDATE ─────────────────────────────────────────────────────────────────
+
+  @Patch(':id')
+  @Roles(...CLINICAL_WRITE_ROLES)
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    operationId: 'sickNotes_update',
+    summary:     'Update a sick note',
+    description: 'Only DRAFT sick notes can be updated. All fields are optional.',
+  })
+  @ApiParam({ name: 'id', description: 'Sick note UUID', type: String })
+  @ApiResponse({ status: 200, type: SickNoteResponseDto })
+  @ApiResponse({ status: 404, description: 'Not found' })
+  @ApiResponse({ status: 409, description: 'Note is not in DRAFT status' })
+  update(
+    @Param('id', ParseUUIDPipe) id:  string,
+    @Body()                     dto: UpdateSickNoteDto,
+    @Req()                      req: Request,
+  ) {
+    return this.service.update(id, dto, req.userId, req.workspaceId);
+  }
+
+  // ── BUSINESS OPERATIONS ────────────────────────────────────────────────────
+
+  @Post(':id/issue')
+  @Roles(...CLINICAL_WRITE_ROLES)
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    operationId: 'sickNotes_issue',
+    summary:     'Issue a sick note',
+    description:
+      'Transitions a DRAFT sick note to ISSUED status. ' +
+      'Auto-generates a certificate number (SN-YYYY-XXXXXXXX) if one was not pre-assigned.',
+  })
+  @ApiParam({ name: 'id', description: 'Sick note UUID', type: String })
+  @ApiResponse({ status: 200, type: SickNoteResponseDto })
+  @ApiResponse({ status: 404, description: 'Not found' })
+  @ApiResponse({ status: 409, description: 'Note is not in DRAFT status' })
+  issue(
+    @Param('id', ParseUUIDPipe) id:  string,
+    @Req()                      req: Request,
+  ) {
+    return this.service.issue(id, req.userId, req.workspaceId);
+  }
+
+  @Post(':id/cancel')
+  @Roles(...CLINICAL_WRITE_ROLES)
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    operationId: 'sickNotes_cancel',
+    summary:     'Cancel a sick note',
+    description: 'Cancels a DRAFT or ISSUED sick note. Reason is stored in metadata.',
+  })
+  @ApiParam({ name: 'id', description: 'Sick note UUID', type: String })
+  @ApiResponse({ status: 200, type: SickNoteResponseDto })
+  @ApiResponse({ status: 404, description: 'Not found' })
+  @ApiResponse({ status: 409, description: 'Note is already cancelled or expired' })
+  cancel(
+    @Param('id', ParseUUIDPipe) id:  string,
+    @Body()                     dto: CancelSickNoteDto,
+    @Req()                      req: Request,
+  ) {
+    return this.service.cancel(id, dto, req.userId, req.workspaceId);
+  }
+
+  @Post(':id/extend')
+  @Roles(...CLINICAL_WRITE_ROLES)
+  @HttpCode(HttpStatus.CREATED)
+  @ApiOperation({
+    operationId: 'sickNotes_extend',
+    summary:     'Extend a sick note',
+    description:
+      'Creates a NEW ISSUED sick note that extends the original. ' +
+      'The new note starts the day after the original endDate and runs to newEndDate. ' +
+      'The original note is not modified.',
+  })
+  @ApiParam({ name: 'id', description: 'Original sick note UUID', type: String })
+  @ApiResponse({ status: 201, type: SickNoteResponseDto, description: 'New extension sick note' })
+  @ApiResponse({ status: 400, description: 'newEndDate is not after the original endDate' })
+  @ApiResponse({ status: 404, description: 'Original note not found' })
+  @ApiResponse({ status: 409, description: 'Original note is not ISSUED' })
+  extend(
+    @Param('id', ParseUUIDPipe) id:  string,
+    @Body()                     dto: ExtendSickNoteDto,
+    @Req()                      req: Request,
+  ) {
+    return this.service.extend(id, dto, req.userId, req.workspaceId);
+  }
+
+  @Post(':id/expire')
+  @Roles(...CLINICAL_WRITE_ROLES)
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    operationId: 'sickNotes_expire',
+    summary:     'Manually expire a sick note',
+    description: 'Transitions an ISSUED sick note to EXPIRED. Normally done by a scheduled job; this endpoint allows manual override.',
+  })
+  @ApiParam({ name: 'id', description: 'Sick note UUID', type: String })
+  @ApiResponse({ status: 200, type: SickNoteResponseDto })
+  @ApiResponse({ status: 404, description: 'Not found' })
+  @ApiResponse({ status: 409, description: 'Note is not in ISSUED status' })
+  expire(
+    @Param('id', ParseUUIDPipe) id:  string,
+    @Req()                      req: Request,
+  ) {
+    return this.service.expire(id, req.userId, req.workspaceId);
+  }
+
+  // ── SOFT DELETE / RESTORE ──────────────────────────────────────────────────
+
+  @Delete(':id')
+  @Roles(...CLINICAL_WRITE_ROLES)
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @ApiOperation({
+    operationId: 'sickNotes_remove',
+    summary:     'Soft-delete a sick note',
+    description: 'Sets deletedAt timestamp. Record is excluded from all standard queries.',
+  })
+  @ApiParam({ name: 'id', description: 'Sick note UUID', type: String })
+  @ApiResponse({ status: 204, description: 'Soft-deleted successfully' })
+  @ApiResponse({ status: 404, description: 'Not found' })
+  remove(
+    @Param('id', ParseUUIDPipe) id:  string,
+    @Req()                      req: Request,
+  ) {
+    return this.service.remove(id, req.userId, req.workspaceId);
+  }
+
+  @Post(':id/restore')
+  @Roles(...CLINICAL_WRITE_ROLES)
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    operationId: 'sickNotes_restore',
+    summary:     'Restore a soft-deleted sick note',
+    description: 'Clears deletedAt so the record re-appears in all standard queries.',
+  })
+  @ApiParam({ name: 'id', description: 'Sick note UUID', type: String })
+  @ApiResponse({ status: 200, type: SickNoteResponseDto })
+  @ApiResponse({ status: 404, description: 'Not found' })
+  @ApiResponse({ status: 409, description: 'Note is not deleted' })
+  restore(
+    @Param('id', ParseUUIDPipe) id:  string,
+    @Req()                      req: Request,
+  ) {
+    return this.service.restore(id, req.userId, req.workspaceId);
+  }
+}
