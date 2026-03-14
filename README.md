@@ -1,98 +1,235 @@
-<p align="center">
-  <a href="http://nestjs.com/" target="blank"><img src="https://nestjs.com/img/logo-small.svg" width="120" alt="Nest Logo" /></a>
-</p>
+# EasyClinics EMR — Backend API
 
-[circleci-image]: https://img.shields.io/circleci/build/github/nestjs/nest/master?token=abc123def456
-[circleci-url]: https://circleci.com/gh/nestjs/nest
+> Electronic Medical Records backend built with NestJS, TypeORM, and MySQL.
+> Designed for multi-workspace clinic management with domain-driven architecture.
 
-  <p align="center">A progressive <a href="http://nodejs.org" target="_blank">Node.js</a> framework for building efficient and scalable server-side applications.</p>
-    <p align="center">
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/v/@nestjs/core.svg" alt="NPM Version" /></a>
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/l/@nestjs/core.svg" alt="Package License" /></a>
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/dm/@nestjs/common.svg" alt="NPM Downloads" /></a>
-<a href="https://circleci.com/gh/nestjs/nest" target="_blank"><img src="https://img.shields.io/circleci/build/github/nestjs/nest/master" alt="CircleCI" /></a>
-<a href="https://discord.gg/G7Qnnhy" target="_blank"><img src="https://img.shields.io/badge/discord-online-brightgreen.svg" alt="Discord"/></a>
-<a href="https://opencollective.com/nest#backer" target="_blank"><img src="https://opencollective.com/nest/backers/badge.svg" alt="Backers on Open Collective" /></a>
-<a href="https://opencollective.com/nest#sponsor" target="_blank"><img src="https://opencollective.com/nest/sponsors/badge.svg" alt="Sponsors on Open Collective" /></a>
-  <a href="https://paypal.me/kamilmysliwiec" target="_blank"><img src="https://img.shields.io/badge/Donate-PayPal-ff3f59.svg" alt="Donate us"/></a>
-    <a href="https://opencollective.com/nest#sponsor"  target="_blank"><img src="https://img.shields.io/badge/Support%20us-Open%20Collective-41B883.svg" alt="Support us"></a>
-  <a href="https://twitter.com/nestframework" target="_blank"><img src="https://img.shields.io/twitter/follow/nestframework.svg?style=social&label=Follow" alt="Follow us on Twitter"></a>
-</p>
-  <!--[![Backers on Open Collective](https://opencollective.com/nest/backers/badge.svg)](https://opencollective.com/nest#backer)
-  [![Sponsors on Open Collective](https://opencollective.com/nest/sponsors/badge.svg)](https://opencollective.com/nest#sponsor)-->
+---
 
-## Description
+## Table of Contents
 
-[Nest](https://github.com/nestjs/nest) framework TypeScript starter repository.
+- [Overview](#overview)
+- [Tech Stack](#tech-stack)
+- [Architecture](#architecture)
+- [Getting Started](#getting-started)
+- [Environment Variables](#environment-variables)
+- [API Reference](#api-reference)
+- [Database Migrations](#database-migrations)
+- [Scripts](#scripts)
+- [Security](#security)
 
-## Project setup
+---
 
-```bash
-$ npm install
+## Overview
+
+EasyClinics EMR is a multi-tenant Electronic Medical Records system designed for healthcare providers. The backend exposes a versioned REST API (`/api/v1/`) covering patient records, clinical consultations, appointments, billing, inventory, care notes, insurance, and audit compliance.
+
+Key capabilities:
+
+- **Multi-workspace** — each clinic operates in an isolated workspace context
+- **Field-level encryption** — sensitive patient data (PII, clinical notes) is AES-256 encrypted at rest
+- **AI-assisted workflows** — integrates OpenAI, Anthropic Claude, and Google Gemini for clinical decision support
+- **Comprehensive audit trail** — every data change is logged with user, timestamp, and workspace context
+- **Real-time notifications** — WebSocket gateway + Firebase push notifications
+- **Timezone-aware** — all local timestamps are CAT (UTC+2 / Africa/Harare); DB always stores UTC
+
+---
+
+## Tech Stack
+
+| Layer | Technology |
+|---|---|
+| Framework | NestJS 11 |
+| Language | TypeScript 5.7 (strict mode) |
+| ORM | TypeORM 0.3 |
+| Database | MySQL 8 |
+| Auth | JWT (access + refresh tokens), Passport |
+| Encryption | AES-256-CBC via scrypt key derivation |
+| Validation | class-validator + class-transformer |
+| Logging | Winston + daily rotate |
+| Scheduling | @nestjs/schedule |
+| Real-time | Socket.IO (WebSockets) |
+| Push | Firebase Admin SDK |
+| AI | OpenAI, Anthropic SDK, Google Generative AI |
+| Docs | Swagger / OpenAPI |
+
+---
+
+## Architecture
+
+The codebase follows **Domain-Driven Design** with the following structure:
+
+```
+src/
+├── domains/                  # Business domains
+│   ├── patients/             # Patient records, history, family conditions
+│   ├── appointments/         # Scheduling, slots, reminders
+│   ├── consultations/        # Clinical consultations & diagnoses
+│   ├── care-notes/           # Nursing & care team notes
+│   ├── billing/              # Invoices, payments, insurance claims
+│   ├── inventory/            # Medication & supply management
+│   ├── insurance/            # Insurance providers & policies
+│   ├── audit/                # Compliance audit log
+│   └── notifications/        # In-app & push notifications
+├── modules/                  # Shared infrastructure modules
+│   ├── database/             # TypeORM data source & base repository
+│   ├── security/             # AES encryption service
+│   ├── logger/               # Winston logger service
+│   ├── file-upload/          # Multer file handling
+│   ├── storage/              # File storage service
+│   └── versioning/           # API version helpers
+├── common/                   # DTOs, guards, interceptors, decorators
+├── config/                   # Configuration modules (app, db, jwt, etc.)
+└── migrations/               # TypeORM migration files
 ```
 
-## Compile and run the project
+All API routes are prefixed `/api/v1/`. URI versioning is enabled — future breaking changes can be introduced under `/api/v2/` without affecting existing clients.
+
+---
+
+## Getting Started
+
+### Prerequisites
+
+- Node.js 20+
+- MySQL 8
+- npm 10+
+
+### Installation
 
 ```bash
-# development
-$ npm run start
+# 1. Clone the repository
+git clone <repo-url>
+cd easyclinics-emr-backend
 
-# watch mode
-$ npm run start:dev
+# 2. Install dependencies
+npm install
 
-# production mode
-$ npm run start:prod
+# 3. Copy and configure environment variables
+cp .env.example .env
+# Edit .env — see Environment Variables section below
+
+# 4. Run database migrations
+npm run migration:run
+
+# 5. Start the development server
+npm run start:dev
 ```
 
-## Run tests
+The API will be available at `http://localhost:3000/api/v1`.
+Swagger docs: `http://localhost:3000/api/docs` *(when enabled in config)*.
+
+---
+
+## Environment Variables
+
+Copy `.env.example` to `.env` and fill in the required values.
+
+| Variable | Required | Description |
+|---|---|---|
+| `NODE_ENV` | Yes | `development` / `production` / `test` |
+| `PORT` | Yes | HTTP port (default: `3000`) |
+| `TZ` | Yes | Timezone — use `Africa/Harare` for CAT |
+| `DB_HOST` | Yes | MySQL host |
+| `DB_PORT` | Yes | MySQL port (default: `3306`) |
+| `DB_USERNAME` | Yes | MySQL user |
+| `DB_PASSWORD` | Yes | MySQL password |
+| `DB_DATABASE` | Yes | MySQL database name |
+| `JWT_SECRET` | Yes | Access token signing secret |
+| `JWT_REFRESH_SECRET` | Yes | Refresh token signing secret |
+| `ENCRYPTION_KEY` | Yes | 32-character base key for AES-256 |
+| `ENCRYPTION_SALT` | Yes | Salt for scrypt key derivation — **never change after first run** |
+| `CORS_ORIGIN` | Yes | Comma-separated list of allowed origins |
+| `OPENAI_API_KEY` | No | For AI-assisted features |
+| `ANTHROPIC_API_KEY` | No | For Claude-assisted features |
+| `GEMINI_API_KEY` | No | For Gemini-assisted features |
+| `FIREBASE_SERVICE_ACCOUNT_PATH` | No | Path to Firebase service account JSON |
+
+> **Warning:** Changing `ENCRYPTION_SALT` after the first run will make all existing encrypted data unreadable.
+
+---
+
+## API Reference
+
+All endpoints are prefixed with `/api/v1/`. Authentication uses Bearer JWT tokens.
+
+| Domain | Base Path | Description |
+|---|---|---|
+| Auth | `/api/v1/auth` | Login, refresh, logout |
+| Patients | `/api/v1/patients` | Patient CRUD, search, history |
+| Appointments | `/api/v1/appointments` | Scheduling, availability, reminders |
+| Consultations | `/api/v1/consultations` | Clinical notes, diagnoses, vitals |
+| Care Notes | `/api/v1/care-notes` | Nursing notes, permissions |
+| Billing | `/api/v1/billing` | Invoices, payments |
+| Inventory | `/api/v1/inventory` | Medications, supplies |
+| Insurance | `/api/v1/insurance` | Providers, policies, claims |
+| Audit | `/api/v1/audit` | Compliance audit log |
+| Notifications | `/api/v1/notifications` | In-app notifications |
+
+---
+
+## Database Migrations
 
 ```bash
-# unit tests
-$ npm run test
+# Run pending migrations
+npm run migration:run
 
-# e2e tests
-$ npm run test:e2e
+# Revert the last migration
+npm run migration:revert
 
-# test coverage
-$ npm run test:cov
+# Generate a new migration from entity changes
+npm run migration:generate -- src/migrations/MigrationName
+
+# Create a blank migration file
+npm run migration:create -- src/migrations/MigrationName
 ```
 
-## Deployment
+> `DB_SYNCHRONIZE` must be `false` in all environments. Use migrations exclusively.
 
-When you're ready to deploy your NestJS application to production, there are some key steps you can take to ensure it runs as efficiently as possible. Check out the [deployment documentation](https://docs.nestjs.com/deployment) for more information.
+---
 
-If you are looking for a cloud-based platform to deploy your NestJS application, check out [Mau](https://mau.nestjs.com), our official platform for deploying NestJS applications on AWS. Mau makes deployment straightforward and fast, requiring just a few simple steps:
+## Scripts
 
 ```bash
-$ npm install -g mau
-$ mau deploy
+# Development (watch mode)
+npm run start:dev
+
+# Debug mode
+npm run start:debug
+
+# Production build
+npm run build
+npm run start:prod
+
+# Linting
+npm run lint
+
+# Formatting
+npm run format
+
+# Unit tests
+npm run test
+
+# Test coverage
+npm run test:cov
+
+# E2E tests
+npm run test:e2e
 ```
 
-With Mau, you can deploy your application in just a few clicks, allowing you to focus on building features rather than managing infrastructure.
+---
 
-## Resources
+## Security
 
-Check out a few resources that may come in handy when working with NestJS:
+- **Encryption at rest** — PII and clinical data is encrypted with AES-256-CBC before database storage. Decryption happens at the application layer only.
+- **Password hashing** — bcrypt with configurable salt rounds.
+- **JWT** — short-lived access tokens (1h) + long-lived refresh tokens (7d) stored securely.
+- **Rate limiting** — configurable per-IP throttle via `@nestjs/throttler`.
+- **CORS** — explicit allowlist; credentials mode enabled.
+- **Audit logging** — every create/update/delete is recorded with actor, workspace, and diff.
+- **Input validation** — all incoming payloads are validated and whitelisted via `class-validator`. Unknown fields are rejected.
 
-- Visit the [NestJS Documentation](https://docs.nestjs.com) to learn more about the framework.
-- For questions and support, please visit our [Discord channel](https://discord.gg/G7Qnnhy).
-- To dive deeper and get more hands-on experience, check out our official video [courses](https://courses.nestjs.com/).
-- Deploy your application to AWS with the help of [NestJS Mau](https://mau.nestjs.com) in just a few clicks.
-- Visualize your application graph and interact with the NestJS application in real-time using [NestJS Devtools](https://devtools.nestjs.com).
-- Need help with your project (part-time to full-time)? Check out our official [enterprise support](https://enterprise.nestjs.com).
-- To stay in the loop and get updates, follow us on [X](https://x.com/nestframework) and [LinkedIn](https://linkedin.com/company/nestjs).
-- Looking for a job, or have a job to offer? Check out our official [Jobs board](https://jobs.nestjs.com).
-
-## Support
-
-Nest is an MIT-licensed open source project. It can grow thanks to the sponsors and support by the amazing backers. If you'd like to join them, please [read more here](https://docs.nestjs.com/support).
-
-## Stay in touch
-
-- Author - [Kamil Myśliwiec](https://twitter.com/kammysliwiec)
-- Website - [https://nestjs.com](https://nestjs.com/)
-- Twitter - [@nestframework](https://twitter.com/nestframework)
+---
 
 ## License
 
-Nest is [MIT licensed](https://github.com/nestjs/nest/blob/master/LICENSE).
+Private and confidential. All rights reserved — EasyClinics.
