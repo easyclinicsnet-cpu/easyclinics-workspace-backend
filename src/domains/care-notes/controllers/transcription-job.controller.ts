@@ -17,6 +17,7 @@
  *   GET    /transcription-jobs/:id                — full detail / status of one job
  *   GET    /transcription-jobs/:id/transcript     — load the linked RecordingsTranscript
  *   PATCH  /transcription-jobs/:id/cancel         — cancel a pending/in-progress job
+ *   PATCH  /transcription-jobs/:id/retry          — retry a failed/cancelled job
  *
  * WebSocket (namespace /transcription-jobs):
  *   Client connects with JWT → auto-joins personal room
@@ -52,7 +53,7 @@ import { PermissionsGuard }   from '../../../common/security/auth/permissions.gu
 import { Roles, Permissions } from '../../../common/security/auth/decorators';
 import { UserRole, TranscriptionStatus, TranscriptionMode } from '../../../common/enums';
 
-import { TranscriptionJobService } from '../services/transcription-job.service';
+import { TranscriptionJobService, type TranscriptionItemDto } from '../services/transcription-job.service';
 
 // ---------------------------------------------------------------------------
 // Role shorthand groups
@@ -332,6 +333,40 @@ export class TranscriptionJobController {
       id,
       req.userId,
       req.workspaceId,
+    );
+  }
+
+  /**
+   * PATCH /api/v1/transcription-jobs/:id/retry
+   *
+   * Retries a failed or cancelled transcription job by resetting it to
+   * PENDING state. Only works if the original audio file still exists.
+   */
+  @Patch(':id/retry')
+  @Roles(...DOCTOR_ROLES)
+  @Permissions('care-notes:write')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    operationId: 'transcriptionJobs_retry',
+    summary: 'Retry a failed transcription job',
+    description:
+      'Resets a FAILED or CANCELLED transcription job back to PENDING so it can ' +
+      'be reprocessed. The original audio file must still exist on disk.',
+  })
+  @ApiParam({ name: 'id', description: 'Transcription job UUID', type: String, format: 'uuid' })
+  @ApiResponse({ status: 200,  description: 'Job reset for retry' })
+  @ApiResponse({ status: 400,  description: 'Job is not in a retryable state or audio file missing' })
+  @ApiResponse({ status: 401,  description: 'Unauthorized' })
+  @ApiResponse({ status: 403,  description: 'Forbidden — not the owning doctor' })
+  @ApiResponse({ status: 404,  description: 'Job not found' })
+  async retryFailedJob(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Req() req: Request,
+  ): Promise<TranscriptionItemDto> {
+    return this.transcriptionJobService.retryFailedJob(
+      id,
+      req.workspaceId,
+      req.userId,
     );
   }
 }

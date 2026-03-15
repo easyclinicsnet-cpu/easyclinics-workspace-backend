@@ -99,7 +99,7 @@ export class TranscriptionJob extends BaseEntity {
 
   /** Human-readable progress message displayed in the job list / status card. */
   @Column({ type: 'varchar', length: 500, nullable: true })
-  progressMessage: string;
+  progressMessage: string | null;
 
   // ── Audio File ──────────────────────────────────────────────────────────────
 
@@ -220,7 +220,7 @@ export class TranscriptionJob extends BaseEntity {
 
   /** Wall-clock time from startedAt → completedAt in milliseconds. */
   @Column({ type: 'int', unsigned: true, nullable: true })
-  processingTimeMs: number;
+  processingTimeMs: number | null;
 
   // ── Reliability ─────────────────────────────────────────────────────────────
 
@@ -230,21 +230,21 @@ export class TranscriptionJob extends BaseEntity {
 
   /** Short error message suitable for display in the UI. */
   @Column({ type: 'varchar', length: 1000, nullable: true })
-  errorMessage: string;
+  errorMessage: string | null;
 
   /** Full error details as a JSON string for developer debugging. */
   @Column({ type: 'text', nullable: true })
-  errorDetails: string;
+  errorDetails: string | null;
 
   // ── Timestamps ──────────────────────────────────────────────────────────────
 
   /** When the job actually began processing (after any queue wait). */
   @Column({ type: 'timestamp', nullable: true })
-  startedAt: Date;
+  startedAt: Date | null;
 
   /** When the transcription pipeline finished and the transcript was saved. */
   @Column({ type: 'timestamp', nullable: true })
-  completedAt: Date;
+  completedAt: Date | null;
 
   /** When the associated clinical note was generated (if applicable). */
   @Column({ type: 'timestamp', nullable: true })
@@ -416,7 +416,7 @@ export class TranscriptionJob extends BaseEntity {
     status: TranscriptionStatus;
     currentStep: TranscriptionStep;
     progressPercentage: number;
-    progressMessage: string;
+    progressMessage: string | null;
     consultationId: string;
     doctorId: string;
     patientName: string;
@@ -429,11 +429,11 @@ export class TranscriptionJob extends BaseEntity {
     noteId: string;
     resolvedProvider: string;
     resolvedModel: string;
-    processingTimeMs: number;
+    processingTimeMs: number | null;
     retryCount: number;
-    errorMessage: string;
-    startedAt: Date;
-    completedAt: Date;
+    errorMessage: string | null;
+    startedAt: Date | null;
+    completedAt: Date | null;
     noteGeneratedAt: Date;
     createdAt: Date;
   } {

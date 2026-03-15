@@ -11,6 +11,7 @@ import {
 import { DataSource } from 'typeorm';
 import { v4 as uuidv4 } from 'uuid';
 import { ConfigService } from '@nestjs/config';
+import * as fs from 'fs';
 
 import { LoggerService } from '../../../common/logger/logger.service';
 import { Aes256Service } from '../../../common/security/encryption/aes-256.service';
@@ -75,7 +76,7 @@ interface TranscriptionFilters {
  * Transcription item DTO for list responses.
  * Uses typed columns directly — no JSON blob parsing.
  */
-interface TranscriptionItemDto {
+export interface TranscriptionItemDto {
   id: string;
   mode: TranscriptionMode;
   status: TranscriptionStatus;
@@ -415,6 +416,96 @@ export class TranscriptionJobService implements OnModuleInit, OnModuleDestroy {
     );
 
     return { success: true, message: 'Transcription cancelled successfully' };
+  }
+
+  /**
+   * Retry a failed or cancelled transcription job.
+   *
+   * Resets the job back to PENDING/UPLOAD state so the processing pipeline
+   * picks it up again. Only works if the original audio file still exists
+   * on disk.
+   *
+   * @param jobId - Transcription job ID
+   * @param workspaceId - Tenant workspace ID
+   * @param userId - The requesting user (must be the owning doctor)
+   * @returns The reset job as a list item DTO
+   */
+  async retryFailedJob(
+    jobId: string,
+    workspaceId: string,
+    userId: string,
+  ): Promise<TranscriptionItemDto> {
+    this.logger.log(`Retrying failed transcription job: ${jobId}`);
+
+    const job = await this.transcriptionRepo.findOne({
+      where: { id: jobId, workspaceId },
+    });
+
+    if (!job) {
+      throw new NotFoundException(
+        `Transcription job not found: ${jobId}`,
+      );
+    }
+
+    // Authorization check
+    if (job.doctorId !== userId) {
+      throw new ForbiddenException(
+        'You are not authorized to retry this transcription',
+      );
+    }
+
+    // Only FAILED or CANCELLED jobs can be retried
+    if (
+      job.status !== TranscriptionStatus.FAILED &&
+      job.status !== TranscriptionStatus.CANCELLED
+    ) {
+      throw new BadRequestException(
+        `Cannot retry transcription in status: ${job.status}. ` +
+          'Only FAILED or CANCELLED transcriptions can be retried.',
+      );
+    }
+
+    // Verify the audio file still exists on disk
+    if (!job.audioFilePath || !fs.existsSync(job.audioFilePath)) {
+      throw new BadRequestException(
+        'Cannot retry transcription: the original audio file no longer exists on disk.',
+      );
+    }
+
+    const previousStatus = job.status;
+
+    // Reset the job to its initial state for reprocessing
+    job.status = TranscriptionStatus.PENDING;
+    job.currentStep = TranscriptionStep.UPLOAD;
+    job.retryCount = 0;
+    job.progressPercentage = 0;
+    job.progressMessage = null;
+    job.errorMessage = null;
+    job.errorDetails = null;
+    job.startedAt = null;
+    job.completedAt = null;
+    job.processingTimeMs = null;
+
+    await this.transcriptionRepo.save(job);
+
+    this.logger.log(
+      `Transcription job reset for retry: ${jobId} (was ${previousStatus})`,
+    );
+
+    await this.safeAuditLog(
+      {
+        userId,
+        action: 'retryFailedJob',
+        eventType: AuditEventType.UPDATE,
+        outcome: AuditOutcome.SUCCESS,
+        resourceType: 'TranscriptionJob',
+        resourceId: jobId,
+        metadata: { action: 'retry', previousStatus },
+      },
+      workspaceId,
+    );
+
+    return this.mapTranscriptionToDto(job);
   }
 
   /**
@@ -1467,6 +1558,8 @@ export class TranscriptionJobService implements OnModuleInit, OnModuleDestroy {
         Date.now() - this.JOB_RETENTION_DAYS * 24 * 60 * 60 * 1000,
       );
 
+      // NOTE: FAILED jobs are intentionally excluded so their audio files
+      // remain on disk and the doctor can retry them via retryFailedJob().
       const result = await this.transcriptionRepo
         .createQueryBuilder()
         .delete()
@@ -1474,7 +1567,6 @@ export class TranscriptionJobService implements OnModuleInit, OnModuleDestroy {
         .where('status IN (:...statuses)', {
           statuses: [
             TranscriptionStatus.NOTE_GENERATED,
-            TranscriptionStatus.FAILED,
             TranscriptionStatus.CANCELLED,
           ],
         })
