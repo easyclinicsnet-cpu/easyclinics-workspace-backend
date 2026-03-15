@@ -687,12 +687,18 @@ export class OpenAiStrategy {
         'Sending case summary generation request to OpenAI with retry logic.',
       );
 
+      const usesCompletionTokens = model.startsWith('gpt-5') || model.startsWith('o');
+      const tokenParam = usesCompletionTokens
+        ? { max_completion_tokens: 1500 }
+        : { max_tokens: 1500 };
+
       const response = await this.retryOperation(
         async () => {
           return await this.openai.chat.completions.create({
             model,
             messages,
-            max_tokens: 1500,
+            ...tokenParam,
+            stream: false as const,
             temperature,
             top_p: 0.9,
           });
@@ -790,12 +796,19 @@ export class OpenAiStrategy {
         `[${operationId}] Sending request to OpenAI chat completion with model: ${modelToUse}`,
       );
 
+      // gpt-5.x and o-series models require max_completion_tokens; legacy models use max_tokens
+      const usesCompletionTokens = modelToUse.startsWith('gpt-5') || modelToUse.startsWith('o');
+      const tokenParam = usesCompletionTokens
+        ? { max_completion_tokens: options.maxTokens || 4000 }
+        : { max_tokens: options.maxTokens || 1000 };
+
       const response: OpenAI.Chat.Completions.ChatCompletion =
         await this.openai.chat.completions.create({
           model: modelToUse,
           messages,
           temperature: options.temperature || 0.0,
-          max_tokens: options.maxTokens || 1000,
+          ...tokenParam,
+          stream: false as const,
           top_p: 0.9,
           response_format: { type: 'json_object' },
         });

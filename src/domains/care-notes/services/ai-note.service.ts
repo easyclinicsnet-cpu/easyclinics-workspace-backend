@@ -1359,6 +1359,7 @@ export class AiNoteService {
 
     try {
       let savedNote: CareNote;
+      let existingDraft: CareNote | null = null;
 
       if (params.existingNoteId) {
         // Optimistic lock check: re-read with the version captured in Phase 1
@@ -1395,17 +1396,35 @@ export class AiNoteService {
 
         savedNote = await qr3.manager.save(CareNote, noteToUpdate);
       } else {
-        // Create new note
-        const newNote = qr3.manager.create(CareNote, {
-          id: uuidv4(),
-          workspaceId: params.workspaceId,
-          consultationId: params.consultationId,
-          authorId: params.userId,
-          type: params.noteType,
-          status: CareNoteStatus.DRAFT,
-          content: JSON.stringify(structuredContent),
-          isAiGenerated: true,
-          aiMetadata: {
+        // ── Idempotency guard ──────────────────────────────────────────────
+        // If a DRAFT note already exists for the same transcript + consultation
+        // (e.g. from a timed-out previous generation), update it instead of
+        // creating a duplicate.
+        if (params.transcriptId && params.consultationId) {
+          existingDraft = await qr3.manager.findOne(CareNote, {
+            where: {
+              workspaceId: params.workspaceId,
+              consultationId: params.consultationId,
+              recordingsTranscriptId: params.transcriptId,
+              status: CareNoteStatus.DRAFT,
+              isAiGenerated: true,
+              isLatestVersion: true,
+              deletedAt: IsNull(),
+            },
+          });
+          if (existingDraft) {
+            this.logger.log(
+              `Idempotency: found existing DRAFT note ${existingDraft.id} for transcript=${params.transcriptId} — updating instead of creating`,
+            );
+          }
+        }
+
+        if (existingDraft) {
+          // Update the existing draft with fresh AI content
+          existingDraft.content = JSON.stringify(structuredContent);
+          existingDraft.type = params.noteType;
+          existingDraft.isAiGenerated = true;
+          existingDraft.aiMetadata = {
             provider: resolvedProvider,
             model: resolvedModel,
             temperature: params.temperature ?? 0.7,
@@ -1413,13 +1432,38 @@ export class AiNoteService {
             timestamp: new Date(),
             transcriptId: params.transcriptId,
             sourceTranscript,
-          },
-          version: 1,
-          isLatestVersion: true,
-          recordingsTranscriptId: params.transcriptId,
-        });
+          };
+          existingDraft.version = (existingDraft.version || 1) + 1;
+          existingDraft.isLatestVersion = true;
 
-        savedNote = await qr3.manager.save(CareNote, newNote);
+          savedNote = await qr3.manager.save(CareNote, existingDraft);
+        } else {
+          // Create new note
+          const newNote = qr3.manager.create(CareNote, {
+            id: uuidv4(),
+            workspaceId: params.workspaceId,
+            consultationId: params.consultationId,
+            authorId: params.userId,
+            type: params.noteType,
+            status: CareNoteStatus.DRAFT,
+            content: JSON.stringify(structuredContent),
+            isAiGenerated: true,
+            aiMetadata: {
+              provider: resolvedProvider,
+              model: resolvedModel,
+              temperature: params.temperature ?? 0.7,
+              generationTimeMs: generationTime,
+              timestamp: new Date(),
+              transcriptId: params.transcriptId,
+              sourceTranscript,
+            },
+            version: 1,
+            isLatestVersion: true,
+            recordingsTranscriptId: params.transcriptId,
+          });
+
+          savedNote = await qr3.manager.save(CareNote, newNote);
+        }
       }
 
       // Create AI source tracking record
@@ -1505,7 +1549,7 @@ export class AiNoteService {
             provider: resolvedProvider,
             model: resolvedModel,
             generationTimeMs: generationTime,
-            isUpdate: !!params.existingNoteId,
+            isUpdate: !!params.existingNoteId || !!existingDraft,
           },
         },
         params.workspaceId,
