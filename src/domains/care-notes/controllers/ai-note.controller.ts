@@ -83,6 +83,18 @@ const audioStorage = diskStorage({
   },
 });
 
+const imageStorage = diskStorage({
+  destination: (_req, _file, cb) => {
+    const dest = join(process.cwd(), 'storage', 'temp', 'images');
+    mkdirSync(dest, { recursive: true });
+    cb(null, dest);
+  },
+  filename: (_req, file, cb) => {
+    const ext = extname(file.originalname) || '.jpg';
+    cb(null, `${uuidv4()}${ext}`);
+  },
+});
+
 import { WorkspaceJwtGuard }  from '../../../common/security/auth/workspace-jwt.guard';
 import { RolesGuard }         from '../../../common/security/auth/roles.guard';
 import { PermissionsGuard }   from '../../../common/security/auth/permissions.guard';
@@ -91,6 +103,7 @@ import { UserRole } from '../../../common/enums';
 import { AiNoteService }                   from '../services/ai-note.service';
 import {
   TranscribeAudioDto,
+  AnalyzeImageDto,
   ApproveAiNoteDto,
   GenerateNoteFromTranscriptDto,
   RegenerateAiNoteDto,
@@ -174,6 +187,42 @@ export class AiNoteController {
   ) {
     return this.aiNoteService.processAudioToNote(
       audioFile?.path,
+      dto as any,
+      req.userId,
+      req.workspaceId,
+    );
+  }
+
+  /**
+   * POST /api/v1/ai-notes/analyze-image
+   * Analyzes a medical image via AI vision and generates a structured transcript.
+   */
+  @Post('analyze-image')
+  @Roles(...CLINICAL_ROLES)
+  @Permissions('care-notes:write')
+  @HttpCode(HttpStatus.CREATED)
+  @UseInterceptors(FileInterceptor('imageFile', { storage: imageStorage }))
+  @ApiConsumes('multipart/form-data')
+  @ApiOperation({
+    operationId: 'aiNotes_analyzeImage',
+    summary:     'Analyze image and generate AI note',
+    description:
+      'Uploads a medical image (lab result, prescription, handwritten note, X-ray, etc.), ' +
+      'extracts text/content via AI vision, and generates a structured transcript. ' +
+      'Supports JPEG, PNG, GIF, WebP. Max 20 MB.',
+  })
+  @ApiBody({ type: AnalyzeImageDto })
+  @ApiResponse({ status: 201, description: 'Image analysis started or completed' })
+  @ApiResponse({ status: 400, description: 'Invalid image file or DTO' })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  @ApiResponse({ status: 403, description: 'Forbidden — clinical role required' })
+  async analyzeImage(
+    @Body() dto: AnalyzeImageDto,
+    @UploadedFile() imageFile: Express.Multer.File,
+    @Req() req: Request,
+  ) {
+    return this.aiNoteService.processImageToNote(
+      imageFile?.path,
       dto as any,
       req.userId,
       req.workspaceId,

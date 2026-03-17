@@ -3,6 +3,7 @@ import {
   TranscriptionStatus,
   TranscriptionStep,
   TranscriptionMode,
+  TranscriptionSourceType,
 } from '../../../common/enums';
 import { AIProvider } from '../../../common/enums';
 import { BaseEntity } from '../../../common/entities/base.entity';
@@ -71,6 +72,16 @@ export class TranscriptionJob extends BaseEntity {
   })
   mode: TranscriptionMode;
 
+  /**
+   * Source type: AUDIO for traditional STT, IMAGE for AI vision analysis.
+   */
+  @Column({
+    type:    'varchar',
+    length:  20,
+    default: TranscriptionSourceType.AUDIO,
+  })
+  sourceType: TranscriptionSourceType;
+
   // ── Status & Pipeline Step ──────────────────────────────────────────────────
 
   @Column({
@@ -103,7 +114,7 @@ export class TranscriptionJob extends BaseEntity {
 
   // ── Audio File ──────────────────────────────────────────────────────────────
 
-  @Column()
+  @Column({ nullable: true })
   audioFilePath: string;
 
   /** File size in bytes — shown in the job list (e.g. "2.4 MB"). */
@@ -113,6 +124,15 @@ export class TranscriptionJob extends BaseEntity {
   /** Audio duration in seconds — shown in the job list (e.g. "1 min 34 s"). */
   @Column({ type: 'int', unsigned: true, nullable: true })
   audioDurationSeconds: number;
+
+  // ── Image File (when sourceType = IMAGE) ──────────────────────────────────
+
+  @Column({ type: 'varchar', length: 500, nullable: true })
+  imageFilePath: string | null;
+
+  /** Image file size in bytes — shown in the job list. */
+  @Column({ type: 'bigint', unsigned: true, nullable: true })
+  imageFileSizeBytes: number | null;
 
   // ── AI Configuration (as requested by the caller) ───────────────────────────
 
@@ -267,6 +287,21 @@ export class TranscriptionJob extends BaseEntity {
     this._progress(TranscriptionStep.TRANSCRIPTION, 30, 'Transcribing audio…');
   }
 
+  // ── Image-specific state transitions ──────────────────────────────────────
+
+  markAsImageProcessing(): void {
+    this.status      = TranscriptionStatus.PROCESSING;
+    this.currentStep = TranscriptionStep.IMAGE_PROCESSING;
+    this.startedAt   = new Date();
+    this._progress(TranscriptionStep.IMAGE_PROCESSING, 10, 'Analyzing image…');
+  }
+
+  markAsImageAnalyzing(): void {
+    this.status      = TranscriptionStatus.TRANSCRIBING;
+    this.currentStep = TranscriptionStep.TRANSCRIPTION;
+    this._progress(TranscriptionStep.TRANSCRIPTION, 30, 'Extracting content from image…');
+  }
+
   /** Call once the raw STT text is available. */
   markAsTranscribed(rawText: string): void {
     this.rawTranscribedText = rawText;
@@ -413,6 +448,7 @@ export class TranscriptionJob extends BaseEntity {
   toListItem(): {
     id: string;
     mode: TranscriptionMode;
+    sourceType: TranscriptionSourceType;
     status: TranscriptionStatus;
     currentStep: TranscriptionStep;
     progressPercentage: number;
@@ -423,6 +459,8 @@ export class TranscriptionJob extends BaseEntity {
     noteType: string;
     audioFileSizeBytes: number;
     audioDurationSeconds: number;
+    imageFilePath: string | null;
+    imageFileSizeBytes: number | null;
     transcriptPreview: string;
     isStructured: boolean;
     transcriptId: string;
@@ -440,6 +478,7 @@ export class TranscriptionJob extends BaseEntity {
     return {
       id:                  this.id,
       mode:                this.mode,
+      sourceType:          this.sourceType,
       status:              this.status,
       currentStep:         this.currentStep,
       progressPercentage:  this.progressPercentage,
@@ -450,6 +489,8 @@ export class TranscriptionJob extends BaseEntity {
       noteType:            this.noteType,
       audioFileSizeBytes:  this.audioFileSizeBytes,
       audioDurationSeconds: this.audioDurationSeconds,
+      imageFilePath:       this.imageFilePath,
+      imageFileSizeBytes:  this.imageFileSizeBytes,
       transcriptPreview:   this.transcriptPreview,
       isStructured:        this.isStructured,
       transcriptId:        this.transcriptId,

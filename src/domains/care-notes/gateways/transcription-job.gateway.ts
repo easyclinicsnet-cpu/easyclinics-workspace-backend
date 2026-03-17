@@ -54,6 +54,8 @@ export interface TranscriptionProgressEvent {
   startedAt?: Date;
   completedAt?: Date;
   updatedAt: Date;
+  /** Source type: AUDIO or IMAGE */
+  sourceType?: string;
   /** Backend notification ID — included on completed/failed events so clients can dismiss/read without a separate lookup. */
   notificationId?: string;
 }

@@ -37,6 +37,7 @@ export * from './note-timeline-query.dto';
 
 // AI Note DTOs
 export * from './transcribe-audio.dto';
+export * from './analyze-image.dto';
 export * from './generate-note-from-transcript.dto';
 export * from './approve-ai-note.dto';
 export * from './reject-ai-note.dto';

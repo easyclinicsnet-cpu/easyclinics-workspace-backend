@@ -4,6 +4,7 @@ import OpenAI from 'openai';
 import * as fs from 'fs';
 import * as path from 'path';
 import { AIProvider, CareNoteType } from '../../../common/enums';
+import { AiTokenUsage } from '../interfaces/ai-generation-strategy.interface';
 import { AudioProcessor } from '../../../common/file-upload/audio-optimizer.service';
 import { AudioChunk } from '../../../common/interfaces/audio-chunk.interface';
 import { LoggerService } from '../../../common/logger/logger.service';
@@ -54,6 +55,9 @@ export class OpenAiStrategy {
   private readonly CHUNK_SIZE_MINUTES = 3; // Optimal chunk size for parallel processing
   private readonly MAX_PARALLEL_CHUNKS = 10; // Process up to 4 chunks simultaneously
 
+  // Token usage tracking for billing
+  private lastTokenUsage: AiTokenUsage | null = null;
+
   // Enhanced retry configuration
   private readonly retryConfig: RetryConfig = {
     maxRetries: 3,
@@ -85,6 +89,15 @@ export class OpenAiStrategy {
     this.logger.log(
       `OpenAI Strategy initialized: timeout=${timeout}ms, maxRetries=${this.retryConfig.maxRetries}`,
     );
+  }
+
+  /**
+   * Returns token usage from the most recent API call and resets the stored value.
+   */
+  getLastTokenUsage(): AiTokenUsage | null {
+    const usage = this.lastTokenUsage;
+    this.lastTokenUsage = null;
+    return usage;
   }
 
   async healthCheck(): Promise<{ healthy: boolean; details?: string }> {
@@ -719,6 +732,15 @@ export class OpenAiStrategy {
         this.logger.warn('OpenAI response was truncated due to token limit');
       }
 
+      // Capture token usage for billing
+      if (response.usage) {
+        this.lastTokenUsage = {
+          inputTokens: response.usage.prompt_tokens || 0,
+          outputTokens: response.usage.completion_tokens || 0,
+          totalTokens: response.usage.total_tokens || 0,
+        };
+      }
+
       return response;
     } catch (error) {
       this.logger.error('Case summary generation error', this.extractErrorMessage(error));
@@ -827,6 +849,15 @@ export class OpenAiStrategy {
         this.logger.warn(
           `[${operationId}] OpenAI response was truncated due to token limit`,
         );
+      }
+
+      // Capture token usage for billing
+      if (response.usage) {
+        this.lastTokenUsage = {
+          inputTokens: response.usage.prompt_tokens || 0,
+          outputTokens: response.usage.completion_tokens || 0,
+          totalTokens: response.usage.total_tokens || 0,
+        };
       }
 
       // Safely handle possible null content
@@ -2006,9 +2037,12 @@ Generate a SOAP NOTE in JSON format with this structure:
   /**
    * Get supported models for different operations
    */
-  getSupportedModels(operation: 'transcription' | 'generation'): string[] {
+  getSupportedModels(operation: 'transcription' | 'generation' | 'image_analysis'): string[] {
     if (operation === 'transcription') {
       return ['whisper-1'];
+    }
+    if (operation === 'image_analysis') {
+      return ['gpt-4o', 'gpt-4-turbo'];
     }
     return this.supportedChatModels;
   }
@@ -2025,5 +2059,129 @@ Generate a SOAP NOTE in JSON format with this structure:
    */
   getProvider(): AIProvider {
     return AIProvider.OPENAI;
+  }
+
+  // ===========================================================================
+  // IMAGE ANALYSIS (Vision)
+  // ===========================================================================
+
+  private static readonly ALLOWED_IMAGE_EXTENSIONS = ['.jpg', '.jpeg', '.png', '.gif', '.webp'];
+  private static readonly MAX_IMAGE_SIZE = 20 * 1024 * 1024; // 20 MB
+  private static readonly IMAGE_MIME_MAP: Record<string, string> = {
+    '.jpg': 'image/jpeg',
+    '.jpeg': 'image/jpeg',
+    '.png': 'image/png',
+    '.gif': 'image/gif',
+    '.webp': 'image/webp',
+  };
+
+  /**
+   * Analyze an image using GPT-4o vision and extract text / clinical findings.
+   */
+  async analyzeImage(
+    filePath: string,
+    context?: string,
+    language?: string,
+  ): Promise<{ text: string }> {
+    const operationId = `img_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
+    this.logger.log(`[${operationId}] Starting image analysis: ${filePath}`);
+
+    // Validate
+    this.validateImageFile(filePath);
+
+    // Read as base64
+    const ext = path.extname(filePath).toLowerCase();
+    const mimeType = OpenAiStrategy.IMAGE_MIME_MAP[ext] || 'image/jpeg';
+    const imageBuffer = fs.readFileSync(filePath);
+    const base64Image = imageBuffer.toString('base64');
+    const dataUri = `data:${mimeType};base64,${base64Image}`;
+
+    const systemPrompt = `You are a medical document and image analysis specialist. Analyze the provided image and extract ALL visible text, data, and clinical findings.
+
+INSTRUCTIONS:
+1. If this is a document (lab result, prescription, handwritten note, referral letter): Extract ALL text exactly as written, preserving structure and formatting.
+2. If this is a clinical image (X-ray, ultrasound, CT scan, photo of wound/condition): Describe visible clinical findings in professional medical terminology.
+3. Preserve all numerical values, units, dates, and reference ranges.
+4. Maintain the original structure (tables, lists, sections) as closely as possible.
+5. Flag any values that appear abnormal or out of range.
+6. Do NOT add interpretations or diagnoses beyond what is visible.
+${language && language !== 'en' ? `7. Output language: ${language}` : ''}
+${context ? `\nAdditional context from the doctor: ${context}` : ''}`;
+
+    const startTime = Date.now();
+
+    const response = await this.retryOperation(
+      async () => {
+        return this.openai.chat.completions.create({
+          model: 'gpt-4o',
+          messages: [
+            { role: 'system', content: systemPrompt },
+            {
+              role: 'user',
+              content: [
+                {
+                  type: 'text',
+                  text: 'Analyze this medical image and extract all relevant content.',
+                },
+                {
+                  type: 'image_url',
+                  image_url: { url: dataUri, detail: 'high' },
+                },
+              ],
+            },
+          ],
+          max_tokens: 4096,
+          temperature: 0.1,
+        });
+      },
+      'image_analysis',
+      operationId,
+    );
+
+    const duration = Date.now() - startTime;
+
+    // Track token usage
+    if (response.usage) {
+      this.lastTokenUsage = {
+        inputTokens: response.usage.prompt_tokens,
+        outputTokens: response.usage.completion_tokens,
+        totalTokens: response.usage.total_tokens,
+      };
+    }
+
+    const text = response.choices?.[0]?.message?.content?.trim() || '';
+    if (!text) {
+      throw new Error('Image analysis returned empty content');
+    }
+
+    this.logger.log(
+      `[${operationId}] Image analysis complete in ${duration}ms, output length=${text.length}`,
+    );
+
+    return { text };
+  }
+
+  private validateImageFile(filePath: string): void {
+    if (!fs.existsSync(filePath)) {
+      throw new Error(`Image file not found: ${filePath}`);
+    }
+
+    const ext = path.extname(filePath).toLowerCase();
+    if (!OpenAiStrategy.ALLOWED_IMAGE_EXTENSIONS.includes(ext)) {
+      throw new Error(
+        `Unsupported image format: ${ext}. Supported: ${OpenAiStrategy.ALLOWED_IMAGE_EXTENSIONS.join(', ')}`,
+      );
+    }
+
+    const stats = fs.statSync(filePath);
+    if (stats.size > OpenAiStrategy.MAX_IMAGE_SIZE) {
+      throw new Error(
+        `Image file too large: ${this.formatBytes(stats.size)}. Maximum: 20 MB`,
+      );
+    }
+
+    if (stats.size === 0) {
+      throw new Error('Image file is empty');
+    }
   }
 }

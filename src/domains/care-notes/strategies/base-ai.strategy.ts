@@ -1,7 +1,9 @@
 import { Logger } from '@nestjs/common';
 import { AIProvider, CareNoteType } from '../../../common/enums';
-import { IAiGenerationStrategy } from '../interfaces';
+import { IAiGenerationStrategy, AiTokenUsage } from '../interfaces';
 import { ChatCompletion } from 'openai/resources/chat';
+import * as fs from 'fs';
+import * as path from 'path';
 
 /**
  * Base AI Strategy Abstract Class
@@ -12,6 +14,7 @@ import { ChatCompletion } from 'openai/resources/chat';
  * - Error handling and logging
  * - Cost estimation
  * - Performance monitoring
+ * - Token usage tracking for billing
  */
 export abstract class BaseAiStrategy implements IAiGenerationStrategy {
   protected readonly logger: Logger;
@@ -24,8 +27,33 @@ export abstract class BaseAiStrategy implements IAiGenerationStrategy {
   protected readonly maxDelay = 10000; // 10 seconds
   protected readonly backoffMultiplier = 2;
 
+  // Token usage tracking — set by each strategy after API calls
+  protected lastTokenUsage: AiTokenUsage | null = null;
+
   constructor(loggerContext: string) {
     this.logger = new Logger(loggerContext);
+  }
+
+  /**
+   * Returns the token usage from the most recent API call and resets the stored value.
+   * Returns null if no usage data is available (e.g. transcription calls).
+   */
+  getLastTokenUsage(): AiTokenUsage | null {
+    const usage = this.lastTokenUsage;
+    this.lastTokenUsage = null;
+    return usage;
+  }
+
+  /**
+   * Store token usage from an API response.
+   * Call this in each strategy after a successful API call.
+   */
+  protected setTokenUsage(inputTokens: number, outputTokens: number): void {
+    this.lastTokenUsage = {
+      inputTokens,
+      outputTokens,
+      totalTokens: inputTokens + outputTokens,
+    };
   }
 
   /**
@@ -49,6 +77,16 @@ export abstract class BaseAiStrategy implements IAiGenerationStrategy {
     temperature?: number;
     maxTokens?: number;
   }): Promise<any>;
+
+  /**
+   * Analyze an image using AI vision and extract text / clinical findings.
+   * Must be implemented by each provider.
+   */
+  abstract analyzeImage(
+    filePath: string,
+    context?: string,
+    language?: string,
+  ): Promise<{ text: string }>;
 
   /**
    * Generate structured transcript
@@ -75,7 +113,7 @@ export abstract class BaseAiStrategy implements IAiGenerationStrategy {
    * Must be implemented by each provider
    */
   abstract getSupportedModels(
-    operation: 'transcription' | 'generation',
+    operation: 'transcription' | 'generation' | 'image_analysis',
   ): string[];
 
   /**
@@ -285,5 +323,65 @@ export abstract class BaseAiStrategy implements IAiGenerationStrategy {
       duration: `${duration}ms`,
       ...metadata,
     });
+  }
+
+  // ===========================================================================
+  // IMAGE HELPERS
+  // ===========================================================================
+
+  private static readonly ALLOWED_IMAGE_EXTENSIONS = ['.jpg', '.jpeg', '.png', '.gif', '.webp'];
+  private static readonly MAX_IMAGE_SIZE = 20 * 1024 * 1024; // 20 MB
+
+  private static readonly MIME_MAP: Record<string, string> = {
+    '.jpg': 'image/jpeg',
+    '.jpeg': 'image/jpeg',
+    '.png': 'image/png',
+    '.gif': 'image/gif',
+    '.webp': 'image/webp',
+  };
+
+  /**
+   * Validate an image file before sending to an AI vision API.
+   * @throws Error if the file is invalid
+   */
+  protected validateImageFile(filePath: string): void {
+    if (!fs.existsSync(filePath)) {
+      throw new Error(`Image file not found: ${filePath}`);
+    }
+
+    const ext = path.extname(filePath).toLowerCase();
+    if (!BaseAiStrategy.ALLOWED_IMAGE_EXTENSIONS.includes(ext)) {
+      throw new Error(
+        `Unsupported image format: ${ext}. Supported: ${BaseAiStrategy.ALLOWED_IMAGE_EXTENSIONS.join(', ')}`,
+      );
+    }
+
+    const stats = fs.statSync(filePath);
+    if (stats.size > BaseAiStrategy.MAX_IMAGE_SIZE) {
+      throw new Error(
+        `Image file too large: ${this.formatBytes(stats.size)}. Maximum: 20 MB`,
+      );
+    }
+
+    if (stats.size === 0) {
+      throw new Error('Image file is empty');
+    }
+  }
+
+  /**
+   * Read an image file and return its base64-encoded content and MIME type.
+   */
+  protected readImageAsBase64(filePath: string): { base64: string; mimeType: string } {
+    const ext = path.extname(filePath).toLowerCase();
+    const mimeType = BaseAiStrategy.MIME_MAP[ext] || 'image/jpeg';
+    const buffer = fs.readFileSync(filePath);
+    return { base64: buffer.toString('base64'), mimeType };
+  }
+
+  /** Format bytes to human-readable string (e.g. "2.4 MB"). */
+  protected formatBytes(bytes: number): string {
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
   }
 }

@@ -10,6 +10,8 @@ import { DataSource , IsNull } from 'typeorm';
 import { LoggerService } from '../../../common/logger/logger.service';
 import { AuditLogService } from '../../audit/services/audit-log.service';
 import { LetterAiGenerationService } from './letter-ai-generation.service';
+import { AiUsageReportingService, AiOperation, AiUsageStatus } from './ai-usage-reporting.service';
+import { AIProvider } from '../../../common/enums';
 import { ReferralLetterRepository } from '../repositories/referral-letter.repository';
 import { SickNoteRepository } from '../repositories/sick-note.repository';
 import { CareNoteRepository } from '../repositories/care-note.repository';
@@ -103,6 +105,7 @@ export class LetterGenerationService {
     private readonly transcriptRepository: RecordingsTranscriptRepository,
     private readonly auditLogService: AuditLogService,
     private readonly letterAiService: LetterAiGenerationService,
+    private readonly aiUsageReportingService: AiUsageReportingService,
     private readonly configService: ConfigService,
     private readonly dataSource: DataSource,
     private readonly logger: LoggerService,
@@ -775,6 +778,7 @@ export class LetterGenerationService {
       let aiMetadata: any = null;
 
       try {
+        const extensionStartTime = Date.now();
         const patientContext = await this.buildPatientContextById(
           originalNote.patientId,
           workspaceId,
@@ -803,6 +807,12 @@ export class LetterGenerationService {
 
         extensionContent = aiResult.finalLetter;
         aiMetadata = aiResult.metadata;
+
+        // Report AI usage to portal for billing
+        this.reportLetterAiUsage(userId, workspaceId, AiOperation.LETTER_GENERATION,
+          aiMetadata?.model ?? 'gpt-4o', aiMetadata?.tokensUsed ?? 0, Date.now() - extensionStartTime,
+          AiUsageStatus.COMPLETED);
+
         this.logger.log(
           `AI extension content generated for sick note: ${dto.originalNoteId}`,
         );
@@ -952,6 +962,8 @@ export class LetterGenerationService {
         patientContext,
         mergedTranscript,
         dto,
+        userId,
+        workspaceId,
       );
 
       this.logger.log(
@@ -1104,6 +1116,8 @@ export class LetterGenerationService {
         patientContext,
         mergedTranscript,
         dto,
+        userId,
+        workspaceId,
       );
 
       this.logger.log(
@@ -1289,6 +1303,8 @@ export class LetterGenerationService {
           patientContext,
           mergedTranscript,
           regenerationDto,
+          userId,
+          workspaceId,
         );
 
         // Update with regenerated content
@@ -1462,6 +1478,8 @@ export class LetterGenerationService {
           patientContext,
           mergedTranscript,
           regenerationDto,
+          userId,
+          workspaceId,
         );
 
         // Update with regenerated content
@@ -1595,6 +1613,8 @@ export class LetterGenerationService {
         patientContext,
         mergedTranscript,
         regenerationDto,
+        userId,
+        workspaceId,
       );
 
       // Update the referral with regenerated content
@@ -1728,6 +1748,8 @@ export class LetterGenerationService {
         patientContext,
         mergedTranscript,
         regenerationDto,
+        userId,
+        workspaceId,
       );
 
       // Update the sick note with regenerated content
@@ -2209,8 +2231,11 @@ export class LetterGenerationService {
     patientContext: string,
     transcript: string,
     dto: GenerateReferralLetterDto | CreateReferralLetterDto,
+    userId?: string,
+    workspaceId?: string,
   ): Promise<{ finalLetter: string; structuredContent?: any; metadata?: any }> {
     this.logger.debug('Generating AI referral content');
+    const startTime = Date.now();
 
     const result = await this.letterAiService.generateReferralLetter({
       patient: patientInfo,
@@ -2233,6 +2258,13 @@ export class LetterGenerationService {
         : undefined,
     });
 
+    // Report AI usage to portal for billing
+    if (userId && workspaceId) {
+      this.reportLetterAiUsage(userId, workspaceId, AiOperation.LETTER_GENERATION,
+        result.metadata?.model ?? 'gpt-4o', result.metadata?.tokensUsed ?? 0, Date.now() - startTime,
+        AiUsageStatus.COMPLETED);
+    }
+
     return result;
   }
 
@@ -2252,8 +2284,11 @@ export class LetterGenerationService {
     patientContext: string,
     transcript: string,
     dto: any,
+    userId?: string,
+    workspaceId?: string,
   ): Promise<{ finalLetter: string; structuredContent?: any; metadata?: any }> {
     this.logger.debug('Generating AI sick note content');
+    const startTime = Date.now();
 
     const result = await this.letterAiService.generateSickNote({
       patient: patientInfo,
@@ -2268,6 +2303,13 @@ export class LetterGenerationService {
       requiresFollowUp: false,
       isHospitalized: false,
     });
+
+    // Report AI usage to portal for billing
+    if (userId && workspaceId) {
+      this.reportLetterAiUsage(userId, workspaceId, AiOperation.LETTER_GENERATION,
+        result.metadata?.model ?? 'gpt-4o', result.metadata?.tokensUsed ?? 0, Date.now() - startTime,
+        AiUsageStatus.COMPLETED);
+    }
 
     return result;
   }
@@ -2289,10 +2331,13 @@ export class LetterGenerationService {
     patientInfo: { fullName: string; age: string; gender: string; fileNumber?: string; dateOfBirth: string },
     patientContext: string,
     transcript: string,
+    userId?: string,
+    workspaceId?: string,
   ): Promise<{ finalLetter: string; metadata?: any }> {
     this.logger.debug(
       `Generating AI extension content for note: ${originalNote.id}`,
     );
+    const startTime = Date.now();
 
     const result = await this.letterAiService.generateSickNoteExtension({
       patient: patientInfo,
@@ -2311,6 +2356,13 @@ export class LetterGenerationService {
       extensionReason:
         'Continuation of medical condition requiring ongoing work restriction',
     });
+
+    // Report AI usage to portal for billing
+    if (userId && workspaceId) {
+      this.reportLetterAiUsage(userId, workspaceId, AiOperation.LETTER_GENERATION,
+        result.metadata?.model ?? 'gpt-4o', result.metadata?.tokensUsed ?? 0, Date.now() - startTime,
+        AiUsageStatus.COMPLETED);
+    }
 
     return result;
   }
@@ -3106,6 +3158,38 @@ export class LetterGenerationService {
         `Failed to create audit log for ${resourceType}/${resourceId}: ${this.extractErrorMessage(error)}`,
       );
     }
+  }
+
+  /**
+   * Fire-and-forget AI usage report to the portal for billing/credit tracking.
+   */
+  private reportLetterAiUsage(
+    userId: string,
+    workspaceId: string,
+    operation: AiOperation,
+    model: string,
+    totalTokens: number,
+    responseTimeMs: number,
+    status: AiUsageStatus,
+    errorMessage?: string,
+  ): void {
+    // Estimate input/output split (AI letters are output-heavy)
+    const inputTokens = Math.round(totalTokens * 0.3);
+    const outputTokens = totalTokens - inputTokens;
+
+    this.aiUsageReportingService.reportUsage({
+      userId,
+      workspaceId,
+      provider: AIProvider.OPENAI,
+      model,
+      operation,
+      tokenUsage: { inputTokens, outputTokens, totalTokens },
+      responseTimeMs,
+      status,
+      errorMessage,
+    }).catch(err => {
+      this.logger.warn(`Failed to report letter AI usage: ${err.message}`);
+    });
   }
 
   // ==========================================================================

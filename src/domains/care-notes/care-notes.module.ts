@@ -1,4 +1,5 @@
 import { Module, forwardRef } from '@nestjs/common';
+import { HttpModule } from '@nestjs/axios';
 
 // Controllers
 import { CareNotesController }          from './controllers/care-notes.controller';
@@ -47,6 +48,7 @@ import { NoteAuditService } from './services/note-audit.service';
 import { NoteAuditService as AuditDomainNoteAuditService } from '../audit/services/note-audit.service';
 import { HealthCheckService } from './services/health-check.service';
 import { TranscriptionJobService } from './services/transcription-job.service';
+import { AiUsageReportingService } from './services/ai-usage-reporting.service';
 
 // AI Strategies
 import {
@@ -118,6 +120,7 @@ import { NotificationsModule } from '../notifications/notifications.module';
     AuditModule, // Audit module for HIPAA compliance
     PatientsModule, // Import for PatientRepository
     NotificationsModule, // Push notifications for background transcription
+    HttpModule.register({ timeout: 10000 }), // HTTP client for portal API calls
     Aes256Module.registerAsync({
       imports: [ConfigModule],
       useFactory: (config: ConfigService) => ({
@@ -173,6 +176,9 @@ import { NotificationsModule } from '../notifications/notifications.module';
     HealthCheckService,
     TranscriptionJobService,
     TranscriptionJobGateway,
+
+    // AI Usage Reporting (portal billing integration)
+    AiUsageReportingService,
 
     // AI Strategies
     AudioProcessor, // Audio processing for transcription
@@ -298,6 +304,8 @@ import { NotificationsModule } from '../notifications/notifications.module';
     TranscriptionJobRepository,
     // AI Strategies
     AiStrategyFactory,
+    // AI Usage
+    AiUsageReportingService,
   ],
 })
 export class CareNotesModule {}

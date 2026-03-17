@@ -12,3 +12,4 @@ export * from './note-audit.service';
 export * from './health-check.service';
 export * from './transcription-job.service';
 export * from './sick-note.service';
+export * from './ai-usage-reporting.service';

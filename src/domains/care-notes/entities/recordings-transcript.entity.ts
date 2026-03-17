@@ -30,7 +30,7 @@ export class RecordingsTranscript extends BaseEntity {
   @Column({ type: 'text' })
   transcribedText: string;
 
-  @Column({ type: 'varchar', length: 255 })
+  @Column({ type: 'varchar', length: 255, nullable: true })
   audioFilePath: string;
 
   @Column({ type: 'text' })
@@ -44,4 +44,12 @@ export class RecordingsTranscript extends BaseEntity {
 
   @Column({ type: 'varchar', length: 255 })
   modelUsed: string;
+
+  /** AUDIO or IMAGE — indicates how the transcript was produced. */
+  @Column({ type: 'varchar', length: 20, default: 'AUDIO' })
+  sourceType: string;
+
+  /** Image file path when sourceType = IMAGE. */
+  @Column({ type: 'varchar', length: 255, nullable: true })
+  imageFilePath: string | null;
 }
