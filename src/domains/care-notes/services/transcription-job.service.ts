@@ -1091,6 +1091,7 @@ export class TranscriptionJobService implements OnModuleInit, OnModuleDestroy {
                 provider,
                 transcription.doctorId,
                 transcription.workspaceId,
+                transcription.audioDurationSeconds,
               ),
               this.AI_CALL_TIMEOUT_MS,
               `AI transcription timed out after ${this.AI_CALL_TIMEOUT_MS / 1000}s`,

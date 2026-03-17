@@ -46,4 +46,10 @@ export class TranscribeAudioDto {
   @IsOptional()
   @IsString()
   patientName?: string;
+
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  @Type(() => Number)
+  audioDurationSeconds?: number;
 }
