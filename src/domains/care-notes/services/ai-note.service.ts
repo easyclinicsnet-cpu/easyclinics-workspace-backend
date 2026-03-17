@@ -370,6 +370,7 @@ export class AiNoteService {
         dto.provider,
         userId,
         workspaceId,
+        dto.audioDurationSeconds,
       );
 
       if (!transcriptionResult || !transcriptionResult.text) {
@@ -1879,6 +1880,7 @@ export class AiNoteService {
         dto.provider,
         userId,
         workspaceId,
+        dto.audioDurationSeconds,
       );
 
       if (!transcriptionResult || !transcriptionResult.text) {
@@ -2060,6 +2062,7 @@ export class AiNoteService {
         dto.provider,
         userId,
         workspaceId,
+        dto.audioDurationSeconds,
       );
       if (!transcriptionResult?.text) {
         throw new BadRequestException('Audio transcription returned empty result');
@@ -2680,6 +2683,7 @@ export class AiNoteService {
     primaryProvider?: AIProvider,
     userId?: string,
     workspaceId?: string,
+    audioDurationSeconds?: number,
   ): Promise<{
     text: string;
     provider: AIProvider;
@@ -2725,6 +2729,7 @@ export class AiNoteService {
           model: this.getDefaultModel(resolvedProvider),
           operation: AiOperation.TRANSCRIPTION,
           tokenUsage,
+          audioDurationSeconds,
           responseTimeMs,
           status: AiUsageStatus.COMPLETED,
           metadata: { language, sourceId },
