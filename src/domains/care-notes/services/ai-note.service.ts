@@ -29,6 +29,7 @@ import { NotificationsService } from '../../notifications/services/notifications
 import { TranscriptionJob } from '../entities/transcription-job.entity';
 
 import { AiStrategyFactory } from '../strategies/ai-strategy.factory';
+import { AiUsageReportingService, AiOperation, AiUsageStatus } from './ai-usage-reporting.service';
 
 import { CareNote } from '../entities/care-note.entity';
 import { RecordingsTranscript } from '../entities/recordings-transcript.entity';
@@ -43,6 +44,7 @@ import {
   AuditOutcome,
   NoteAuditActionType,
   TranscriptionMode,
+  TranscriptionSourceType,
   TranscriptionStatus,
   TranscriptionStep,
 } from '../../../common/enums';
@@ -198,7 +200,9 @@ interface GenerateAndSaveNoteFromContentParams {
 interface GenerateStructuredTranscriptParams {
   rawText: string;
   consultationId: string;
-  audioFilePath: string;
+  audioFilePath?: string;
+  imageFilePath?: string;
+  sourceType?: string;
   provider: AIProvider;
   model: string;
   userId: string;
@@ -219,6 +223,8 @@ interface GenerateNoteContentParams {
   temperature?: number;
   maxTokens?: number;
   templateId?: string;
+  userId?: string;
+  workspaceId?: string;
 }
 
 // ============================
@@ -270,6 +276,7 @@ export class AiNoteService {
     private readonly notificationsService: NotificationsService,
     @InjectDataSource()
     private readonly dataSource: DataSource,
+    private readonly aiUsageReportingService: AiUsageReportingService,
   ) {
     this.logger.setContext('AiNoteService');
     this.logger.log('AiNoteService initialized');
@@ -361,6 +368,8 @@ export class AiNoteService {
         uuidv4(),
         dto.language,
         dto.provider,
+        userId,
+        workspaceId,
       );
 
       if (!transcriptionResult || !transcriptionResult.text) {
@@ -432,6 +441,7 @@ export class AiNoteService {
       }, workspaceId);
 
       return {
+        mode: 'STANDARD',
         transcript: this.mapToTranscriptDto(structuredTranscript),
         rawText: transcriptionResult.text,
         provider: transcriptionResult.provider,
@@ -462,6 +472,191 @@ export class AiNoteService {
           consultationId: dto.consultationId,
           error: error.message,
           transcriptionJobId: job.id,
+        },
+      }, workspaceId);
+
+      throw error;
+    }
+  }
+
+  /**
+   * Process an uploaded image through the AI vision pipeline to produce a structured note.
+   *
+   * Mirrors processAudioToNote() but uses image analysis instead of audio transcription.
+   * Same job lifecycle, WebSocket events, retry logic, and billing.
+   */
+  async processImageToNote(
+    filePath: string,
+    dto: ProcessAudioDto,
+    userId: string,
+    workspaceId: string,
+  ): Promise<any> {
+    this.logger.log(
+      `Processing image to note: consultation=${dto.consultationId}, provider=${dto.provider || 'default'}`,
+    );
+
+    // Background processing delegation
+    if (dto.isBackgroundProcessing) {
+      this.logger.log('Delegating to background image analysis service');
+      return this.transcriptionJobService.createImageAnalysisJob(
+        {
+          doctorId: userId,
+          consultationId: dto.consultationId,
+          imageFilePath: filePath,
+          provider: dto.provider,
+          model: dto.model,
+          temperature: dto.temperature,
+          language: dto.language,
+          context: dto.context,
+          patientName: dto.patientName,
+        },
+        workspaceId,
+      );
+    }
+
+    const startTime = Date.now();
+
+    // Create a STANDARD-mode TranscriptionJob record with sourceType IMAGE
+    const job = this.transcriptionJobRepository.create({
+      id: uuidv4(),
+      workspaceId,
+      doctorId: userId,
+      consultationId: dto.consultationId,
+      audioFilePath: null,
+      imageFilePath: filePath,
+      sourceType: TranscriptionSourceType.IMAGE,
+      mode: TranscriptionMode.STANDARD,
+      status: TranscriptionStatus.PENDING,
+      currentStep: TranscriptionStep.UPLOAD,
+      provider: dto.provider || AIProvider.OPENAI,
+      model: dto.model || '',
+      language: dto.language || 'en',
+      temperature: dto.temperature ?? 0.0,
+      context: dto.context || '',
+      progressPercentage: 0,
+      progressMessage: 'Starting image analysis…',
+      retryCount: 0,
+    } as any) as unknown as TranscriptionJob;
+
+    await this.transcriptionJobRepository.save(job).catch((err) => {
+      this.logger.warn(`Failed to save STANDARD image analysis job record: ${err.message}`);
+    });
+
+    try {
+      // Step 1: Analyze image with provider fallback
+      job.markAsProcessing();
+
+      const analysisResult = await this.analyzeImageWithFallback(
+        filePath,
+        uuidv4(),
+        dto.context,
+        dto.language,
+        dto.provider,
+        userId,
+        workspaceId,
+      );
+
+      if (!analysisResult || !analysisResult.text) {
+        throw new BadRequestException(
+          'Image analysis returned empty result. Please check the image file quality.',
+        );
+      }
+
+      this.logger.log(
+        `Image analyzed successfully in ${Date.now() - startTime}ms, ` +
+        `provider=${analysisResult.provider}, text length=${analysisResult.text.length}`,
+      );
+
+      // Step 2: Generate structured transcript and persist
+      job.markAsTranscribed(analysisResult.text);
+      job.markAsStructuring();
+
+      const structuredTranscript = await this.generateStructuredTranscript({
+        rawText: analysisResult.text,
+        consultationId: dto.consultationId,
+        imageFilePath: filePath,
+        sourceType: TranscriptionSourceType.IMAGE,
+        provider: analysisResult.provider,
+        model: analysisResult.model,
+        userId,
+        workspaceId,
+        context: dto.context,
+        temperature: dto.temperature,
+        sourceId: analysisResult.sourceId,
+      });
+
+      const totalTime = Date.now() - startTime;
+
+      this.logger.log(
+        `Image-to-note processing complete: transcriptId=${structuredTranscript.id}, totalTime=${totalTime}ms`,
+      );
+
+      // Mark STANDARD job as COMPLETED
+      job.markAsSaving();
+      job.markAsCompleted(
+        structuredTranscript.id,
+        structuredTranscript.structuredTranscript,
+        analysisResult.provider,
+        analysisResult.model,
+      );
+
+      this.transcriptionJobRepository.save(job).catch((err) => {
+        this.logger.warn(`Failed to finalize STANDARD image analysis job record: ${err.message}`);
+      });
+
+      // Audit log
+      await this.safeAuditLog({
+        userId,
+        action: 'processImageToNote',
+        eventType: AuditEventType.CREATE,
+        outcome: AuditOutcome.SUCCESS,
+        resourceType: 'RecordingsTranscript',
+        resourceId: structuredTranscript.id,
+        metadata: {
+          action: NoteAuditActionType.AI_GENERATE,
+          consultationId: dto.consultationId,
+          provider: analysisResult.provider,
+          model: analysisResult.model,
+          processingTimeMs: totalTime,
+          textLength: analysisResult.text.length,
+          transcriptionJobId: job.id,
+          mode: TranscriptionMode.STANDARD,
+          sourceType: TranscriptionSourceType.IMAGE,
+        },
+      }, workspaceId);
+
+      return {
+        mode: 'STANDARD',
+        transcript: this.mapToTranscriptDto(structuredTranscript),
+        rawText: analysisResult.text,
+        provider: analysisResult.provider,
+        model: analysisResult.model,
+        processingTimeMs: totalTime,
+        transcriptionJobId: job.id,
+      };
+    } catch (error) {
+      this.logger.error(
+        `Failed to process image to note: ${error.message}`,
+        error.stack,
+      );
+
+      job.markAsFailed(error.message, { stack: error.stack });
+      this.transcriptionJobRepository.save(job).catch((err) => {
+        this.logger.warn(`Failed to save failed STANDARD image analysis job: ${err.message}`);
+      });
+
+      await this.safeAuditLog({
+        userId,
+        action: 'processImageToNote',
+        eventType: AuditEventType.CREATE,
+        outcome: AuditOutcome.FAILURE,
+        resourceType: 'RecordingsTranscript',
+        metadata: {
+          action: NoteAuditActionType.AI_GENERATE,
+          consultationId: dto.consultationId,
+          error: error.message,
+          transcriptionJobId: job.id,
+          sourceType: TranscriptionSourceType.IMAGE,
         },
       }, workspaceId);
 
@@ -728,6 +923,8 @@ export class AiNoteService {
       model: dto.model,
       temperature: dto.temperature,
       maxTokens: dto.maxTokens,
+      userId,
+      workspaceId,
     });
 
     const structuredContent = this.validateAndStructureNoteContent(
@@ -1331,6 +1528,8 @@ export class AiNoteService {
       temperature: params.temperature,
       maxTokens: params.maxTokens,
       templateId: params.templateId,
+      userId: params.userId,
+      workspaceId: params.workspaceId,
     });
     const generationTime = Date.now() - startTime;
 
@@ -1678,6 +1877,8 @@ export class AiNoteService {
         uuidv4(),
         dto.language,
         dto.provider,
+        userId,
+        workspaceId,
       );
 
       if (!transcriptionResult || !transcriptionResult.text) {
@@ -1697,6 +1898,8 @@ export class AiNoteService {
           dto.context,
           dto.model,
           dto.temperature,
+          userId,
+          workspaceId,
         );
       } else {
         mergedText = await this.appendToTranscript(
@@ -1705,6 +1908,8 @@ export class AiNoteService {
           dto.context,
           dto.model,
           dto.temperature,
+          userId,
+          workspaceId,
         );
       }
 
@@ -1722,18 +1927,34 @@ export class AiNoteService {
         const strategy = await this.aiStrategyFactory.getStrategy(
           transcriptionResult.provider,
         );
+        const structStart = Date.now();
         const structuredResult = await strategy.generateStructuredTranscript(
           mergedText,
           temperature,
           model,
           dto.context || '',
         );
+        const structResponseTime = Date.now() - structStart;
 
         if (structuredResult?.choices?.[0]?.message?.content) {
           existingTranscript.structuredTranscript = this.cleanContent(
             structuredResult.choices[0].message.content,
           );
         }
+
+        // Report usage (fire-and-forget)
+        const tokenUsage = (strategy as any).getLastTokenUsage?.() || { inputTokens: 0, outputTokens: 0, totalTokens: 0 };
+        this.aiUsageReportingService.reportUsage({
+          userId,
+          workspaceId,
+          provider: transcriptionResult.provider,
+          model,
+          operation: AiOperation.STRUCTURED_TRANSCRIPT,
+          tokenUsage,
+          responseTimeMs: structResponseTime,
+          status: AiUsageStatus.COMPLETED,
+          metadata: { context: 'updateTranscriptWithAudio' },
+        }).catch(() => {});
       } catch (structuredError) {
         this.logger.warn(
           `Failed to generate structured transcript for update: ${structuredError.message}`,
@@ -1837,6 +2058,8 @@ export class AiNoteService {
         uuidv4(),
         dto.language,
         dto.provider,
+        userId,
+        workspaceId,
       );
       if (!transcriptionResult?.text) {
         throw new BadRequestException('Audio transcription returned empty result');
@@ -1861,6 +2084,8 @@ export class AiNoteService {
           dto.context,
           dto.model,
           dto.temperature,
+          userId,
+          workspaceId,
         );
       } else {
         mergedText = await this.appendToTranscript(
@@ -1869,6 +2094,8 @@ export class AiNoteService {
           dto.context,
           dto.model,
           dto.temperature,
+          userId,
+          workspaceId,
         );
       }
 
@@ -2012,6 +2239,8 @@ export class AiNoteService {
         dto.context,
         dto.model,
         dto.temperature,
+        userId,
+        workspaceId,
       );
 
       // Update primary with merged content
@@ -2023,18 +2252,34 @@ export class AiNoteService {
 
       try {
         const strategyInstance = this.aiStrategyFactory.getStrategy(primary.aiProvider);
+        const mergeStructStart = Date.now();
         const structuredResult = await strategyInstance.generateStructuredTranscript(
           mergedText,
           temperature,
           model,
           dto.context || '',
         );
+        const mergeStructTime = Date.now() - mergeStructStart;
 
         if (structuredResult?.choices?.[0]?.message?.content) {
           primary.structuredTranscript = this.cleanContent(
             structuredResult.choices[0].message.content,
           );
         }
+
+        // Report usage (fire-and-forget)
+        const mergeTokenUsage = (strategyInstance as any).getLastTokenUsage?.() || { inputTokens: 0, outputTokens: 0, totalTokens: 0 };
+        this.aiUsageReportingService.reportUsage({
+          userId,
+          workspaceId,
+          provider: primary.aiProvider,
+          model,
+          operation: AiOperation.STRUCTURED_TRANSCRIPT,
+          tokenUsage: mergeTokenUsage,
+          responseTimeMs: mergeStructTime,
+          status: AiUsageStatus.COMPLETED,
+          metadata: { context: 'mergeTranscripts' },
+        }).catch(() => {});
       } catch (structuredError) {
         this.logger.warn(
           `Failed to generate structured transcript for merge: ${structuredError.message}`,
@@ -2327,12 +2572,14 @@ export class AiNoteService {
       this.logger.debug(
         `Calling AI strategy.generateStructuredTranscript: provider=${params.provider}, model=${params.model}, textLen=${cleanedText.length}`,
       );
+      const structStart = Date.now();
       const structuredResult = await strategy.generateStructuredTranscript(
         cleanedText,
         temperature,
         params.model,
         params.context || '',
       );
+      const structResponseTime = Date.now() - structStart;
 
       if (structuredResult?.choices?.[0]?.message?.content) {
         structuredText = this.cleanContent(
@@ -2341,6 +2588,20 @@ export class AiNoteService {
         this.logger.log(
           `AI structured transcript generated successfully: outputLen=${structuredText.length}, finishReason=${structuredResult.choices[0].finish_reason}`,
         );
+
+        // Report usage to portal (fire-and-forget)
+        const tokenUsage = (strategy as any).getLastTokenUsage?.() || { inputTokens: 0, outputTokens: 0, totalTokens: 0 };
+        this.aiUsageReportingService.reportUsage({
+          userId: params.userId,
+          workspaceId: params.workspaceId,
+          provider: params.provider,
+          model: params.model,
+          operation: AiOperation.STRUCTURED_TRANSCRIPT,
+          tokenUsage,
+          responseTimeMs: structResponseTime,
+          status: AiUsageStatus.COMPLETED,
+          metadata: { consultationId: params.consultationId },
+        }).catch(() => {});
       } else {
         // Do NOT silently fall back — throw so the pipeline retry loop can handle it
         const choicesInfo = JSON.stringify(
@@ -2364,7 +2625,9 @@ export class AiNoteService {
         doctorId: params.userId,
         consultationId: params.consultationId,
         transcribedText: cleanedText,
-        audioFilePath: params.audioFilePath,
+        audioFilePath: params.audioFilePath || undefined,
+        imageFilePath: params.imageFilePath || undefined,
+        sourceType: params.sourceType || 'AUDIO',
         structuredTranscript: structuredText,
         aiProvider: params.provider,
         modelUsed: params.model,
@@ -2415,6 +2678,8 @@ export class AiNoteService {
     sourceId: string,
     language?: string,
     primaryProvider?: AIProvider,
+    userId?: string,
+    workspaceId?: string,
   ): Promise<{
     text: string;
     provider: AIProvider;
@@ -2443,10 +2708,28 @@ export class AiNoteService {
         }
       }
 
+      const transcriptionStart = Date.now();
       const result = await strategy.transcribeAudio(filePath, language);
+      const responseTimeMs = Date.now() - transcriptionStart;
 
       // Mark provider as healthy on success
       this.providerHealthStatus[resolvedProvider] = true;
+
+      // Report usage to portal (fire-and-forget)
+      if (userId && workspaceId) {
+        const tokenUsage = (strategy as any).getLastTokenUsage?.() || { inputTokens: 0, outputTokens: 0, totalTokens: 0 };
+        this.aiUsageReportingService.reportUsage({
+          userId,
+          workspaceId,
+          provider: resolvedProvider,
+          model: this.getDefaultModel(resolvedProvider),
+          operation: AiOperation.TRANSCRIPTION,
+          tokenUsage,
+          responseTimeMs,
+          status: AiUsageStatus.COMPLETED,
+          metadata: { language, sourceId },
+        }).catch(() => {});
+      }
 
       return {
         text: result.text,
@@ -2472,6 +2755,88 @@ export class AiNoteService {
   }
 
   /**
+   * Analyze an image using AI vision with provider fallback.
+   * Mirrors transcribeWithFallback() but calls strategy.analyzeImage().
+   */
+  private async analyzeImageWithFallback(
+    filePath: string,
+    sourceId: string,
+    context?: string,
+    language?: string,
+    primaryProvider?: AIProvider,
+    userId?: string,
+    workspaceId?: string,
+  ): Promise<{
+    text: string;
+    provider: AIProvider;
+    model: string;
+    sourceId: string;
+  }> {
+    this.logger.debug(
+      `Analyzing image with fallback: primaryProvider=${primaryProvider || 'default'}`,
+    );
+
+    try {
+      const {
+        strategy,
+        provider: resolvedProvider,
+        isFallback,
+      } = await this.aiStrategyFactory.getStrategyWithFallback(primaryProvider);
+
+      if (isFallback) {
+        this.logger.warn(
+          `Using fallback provider ${resolvedProvider} for image analysis`,
+        );
+        if (primaryProvider) {
+          this.providerHealthStatus[primaryProvider] = false;
+        }
+      }
+
+      const analysisStart = Date.now();
+      const result = await strategy.analyzeImage(filePath, context, language);
+      const responseTimeMs = Date.now() - analysisStart;
+
+      this.providerHealthStatus[resolvedProvider] = true;
+
+      // Report usage to portal (fire-and-forget)
+      if (userId && workspaceId) {
+        const tokenUsage = (strategy as any).getLastTokenUsage?.() || { inputTokens: 0, outputTokens: 0, totalTokens: 0 };
+        this.aiUsageReportingService.reportUsage({
+          userId,
+          workspaceId,
+          provider: resolvedProvider,
+          model: this.getDefaultModel(resolvedProvider),
+          operation: AiOperation.IMAGE_ANALYSIS,
+          tokenUsage,
+          responseTimeMs,
+          status: AiUsageStatus.COMPLETED,
+          metadata: { language, context, sourceId },
+        }).catch(() => {});
+      }
+
+      return {
+        text: result.text,
+        provider: resolvedProvider,
+        model: this.getDefaultModel(resolvedProvider),
+        sourceId,
+      };
+    } catch (error) {
+      this.logger.error(
+        `All image analysis providers failed: ${error.message}`,
+        error.stack,
+      );
+
+      if (primaryProvider) {
+        this.providerHealthStatus[primaryProvider] = false;
+      }
+
+      throw new InternalServerErrorException(
+        `Image analysis failed across all providers: ${error.message}`,
+      );
+    }
+  }
+
+  /**
    * Generate note content via AI strategy.
    *
    * Delegates to the appropriate AI provider strategy to generate
@@ -2491,16 +2856,35 @@ export class AiNoteService {
 
     try {
       const strategy = this.aiStrategyFactory.getStrategy(provider);
+      const modelUsed = params.model || this.getDefaultModel(provider);
 
+      const noteStart = Date.now();
       const result = await strategy.generateNote({
         content: params.content,
         noteType: params.noteType,
-        model: params.model || this.getDefaultModel(provider),
+        model: modelUsed,
         temperature: params.temperature ?? 0.7,
         maxTokens: params.maxTokens || 2000,
       });
+      const noteResponseTime = Date.now() - noteStart;
 
       this.providerHealthStatus[provider] = true;
+
+      // Report usage to portal (fire-and-forget)
+      if (params.userId && params.workspaceId) {
+        const tokenUsage = (strategy as any).getLastTokenUsage?.() || { inputTokens: 0, outputTokens: 0, totalTokens: 0 };
+        this.aiUsageReportingService.reportUsage({
+          userId: params.userId,
+          workspaceId: params.workspaceId,
+          provider,
+          model: modelUsed,
+          operation: AiOperation.NOTE_GENERATION,
+          tokenUsage,
+          responseTimeMs: noteResponseTime,
+          status: AiUsageStatus.COMPLETED,
+          metadata: { noteType: params.noteType },
+        }).catch(() => {});
+      }
 
       return result;
     } catch (error) {
@@ -2523,6 +2907,7 @@ export class AiNoteService {
             fallbackProvider.provider,
           );
 
+          const fbStart = Date.now();
           const fallbackResult = await fallbackStrategy.generateNote({
             content: params.content,
             noteType: params.noteType,
@@ -2530,8 +2915,25 @@ export class AiNoteService {
             temperature: params.temperature ?? 0.7,
             maxTokens: params.maxTokens || 2000,
           });
+          const fbResponseTime = Date.now() - fbStart;
 
           this.providerHealthStatus[fallbackProvider.provider] = true;
+
+          // Report fallback usage
+          if (params.userId && params.workspaceId) {
+            const fbTokenUsage = (fallbackStrategy as any).getLastTokenUsage?.() || { inputTokens: 0, outputTokens: 0, totalTokens: 0 };
+            this.aiUsageReportingService.reportUsage({
+              userId: params.userId,
+              workspaceId: params.workspaceId,
+              provider: fallbackProvider.provider,
+              model: fallbackProvider.model,
+              operation: AiOperation.NOTE_GENERATION,
+              tokenUsage: fbTokenUsage,
+              responseTimeMs: fbResponseTime,
+              status: AiUsageStatus.COMPLETED,
+              metadata: { noteType: params.noteType, isFallback: true },
+            }).catch(() => {});
+          }
 
           return fallbackResult;
         } catch (fallbackError) {
@@ -3279,6 +3681,8 @@ export class AiNoteService {
     context?: string,
     model?: string,
     temperature?: number,
+    userId?: string,
+    workspaceId?: string,
   ): Promise<string> {
     if (!existingText) return newText;
     if (!newText) return existingText;
@@ -3300,6 +3704,8 @@ export class AiNoteService {
           context,
           model,
           temperature,
+          userId,
+          workspaceId,
         );
       } catch (error) {
         this.logger.warn(
@@ -3330,6 +3736,8 @@ export class AiNoteService {
     context?: string,
     model?: string,
     temperature?: number,
+    userId?: string,
+    workspaceId?: string,
   ): Promise<string> {
     if (!existingText) return newText;
     if (!newText) return existingText;
@@ -3343,6 +3751,8 @@ export class AiNoteService {
           context,
           model,
           temperature,
+          userId,
+          workspaceId,
         );
       } catch (error) {
         this.logger.warn(
@@ -3372,6 +3782,8 @@ export class AiNoteService {
     context?: string,
     model?: string,
     temperature?: number,
+    userId?: string,
+    workspaceId?: string,
   ): Promise<string> {
     switch (strategy) {
       case 'append':
@@ -3387,6 +3799,8 @@ export class AiNoteService {
           context,
           model,
           temperature,
+          userId,
+          workspaceId,
         );
 
       default:
@@ -3413,6 +3827,8 @@ export class AiNoteService {
     context?: string,
     model?: string,
     temperature?: number,
+    userId?: string,
+    workspaceId?: string,
   ): Promise<string> {
     try {
       const provider = this.getBestAvailableProvider();
@@ -3440,14 +3856,30 @@ ${context ? `Context: ${context}` : ''}
 
 Provide only the merged transcript text, no explanations or metadata.`;
 
+      const startTime = Date.now();
       const result = await strategy.generateStructuredTranscript(
         mergePrompt,
         resolvedTemp,
         resolvedModel,
         'merge_transcripts',
       );
+      const responseTimeMs = Date.now() - startTime;
 
       if (result?.choices?.[0]?.message?.content) {
+        // Report usage (fire-and-forget)
+        if (userId && workspaceId) {
+          const tokenUsage = (strategy as any).getLastTokenUsage?.() || { inputTokens: 0, outputTokens: 0, totalTokens: 0 };
+          this.aiUsageReportingService.reportUsage({
+            userId, workspaceId,
+            provider,
+            model: resolvedModel,
+            operation: AiOperation.STRUCTURED_TRANSCRIPT,
+            tokenUsage,
+            responseTimeMs,
+            status: AiUsageStatus.COMPLETED,
+            metadata: { context: 'smartMergeWithAI' },
+          }).catch(() => {});
+        }
         return this.cleanContent(result.choices[0].message.content);
       }
 
@@ -3477,6 +3909,8 @@ Provide only the merged transcript text, no explanations or metadata.`;
     context?: string,
     model?: string,
     temperature?: number,
+    userId?: string,
+    workspaceId?: string,
   ): Promise<string> {
     try {
       const provider = this.getBestAvailableProvider();
@@ -3500,14 +3934,30 @@ ${context ? `Context: ${context}` : ''}
 
 Provide only the combined transcript text, no explanations.`;
 
+      const startTime = Date.now();
       const result = await strategy.generateStructuredTranscript(
         appendPrompt,
         resolvedTemp,
         resolvedModel,
         'append_transcript',
       );
+      const responseTimeMs = Date.now() - startTime;
 
       if (result?.choices?.[0]?.message?.content) {
+        // Report usage (fire-and-forget)
+        if (userId && workspaceId) {
+          const tokenUsage = (strategy as any).getLastTokenUsage?.() || { inputTokens: 0, outputTokens: 0, totalTokens: 0 };
+          this.aiUsageReportingService.reportUsage({
+            userId, workspaceId,
+            provider,
+            model: resolvedModel,
+            operation: AiOperation.STRUCTURED_TRANSCRIPT,
+            tokenUsage,
+            responseTimeMs,
+            status: AiUsageStatus.COMPLETED,
+            metadata: { context: 'smartAppendWithAI' },
+          }).catch(() => {});
+        }
         return this.cleanContent(result.choices[0].message.content);
       }
 
@@ -3536,6 +3986,8 @@ Provide only the combined transcript text, no explanations.`;
     context: string,
     model?: string,
     temperature?: number,
+    userId?: string,
+    workspaceId?: string,
   ): Promise<string> {
     try {
       const provider = this.getBestAvailableProvider();
@@ -3557,14 +4009,30 @@ If there is relevant context-specific information in the existing transcript tha
 
 Provide only the final transcript text, no explanations.`;
 
+      const startTime = Date.now();
       const result = await strategy.generateStructuredTranscript(
         replacePrompt,
         resolvedTemp,
         resolvedModel,
         'replace_transcript',
       );
+      const responseTimeMs = Date.now() - startTime;
 
       if (result?.choices?.[0]?.message?.content) {
+        // Report usage (fire-and-forget)
+        if (userId && workspaceId) {
+          const tokenUsage = (strategy as any).getLastTokenUsage?.() || { inputTokens: 0, outputTokens: 0, totalTokens: 0 };
+          this.aiUsageReportingService.reportUsage({
+            userId, workspaceId,
+            provider,
+            model: resolvedModel,
+            operation: AiOperation.STRUCTURED_TRANSCRIPT,
+            tokenUsage,
+            responseTimeMs,
+            status: AiUsageStatus.COMPLETED,
+            metadata: { context: 'contextAwareReplace' },
+          }).catch(() => {});
+        }
         return this.cleanContent(result.choices[0].message.content);
       }
 

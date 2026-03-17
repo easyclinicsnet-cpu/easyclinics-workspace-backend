@@ -22,6 +22,7 @@ import { TranscriptionJob } from '../entities/transcription-job.entity';
 import { RecordingsTranscript } from '../entities/recordings-transcript.entity';
 
 import { AiNoteService } from './ai-note.service';
+import { AiUsageReportingService, AiOperation, AiUsageStatus } from './ai-usage-reporting.service';
 import { NotificationsService } from '../../notifications/services/notifications.service';
 import {
   TranscriptionJobGateway,
@@ -30,6 +31,7 @@ import {
 
 import {
   AIProvider,
+  TranscriptionSourceType,
   TranscriptionStatus,
   TranscriptionStep,
   TranscriptionMode,
@@ -62,6 +64,24 @@ interface CreateTranscriptionJobParams {
 }
 
 /**
+ * Parameters for creating a background image analysis job.
+ */
+interface CreateImageAnalysisJobParams {
+  doctorId: string;
+  consultationId: string;
+  imageFilePath: string;
+  provider?: AIProvider;
+  model?: string;
+  temperature?: number;
+  language?: string;
+  context?: string;
+  noteType?: string;
+  templateId?: string;
+  imageFileSizeBytes?: number;
+  patientName?: string;
+}
+
+/**
  * Query filters for listing transcriptions.
  */
 interface TranscriptionFilters {
@@ -78,6 +98,7 @@ interface TranscriptionFilters {
  */
 export interface TranscriptionItemDto {
   id: string;
+  sourceType?: string;
   mode: TranscriptionMode;
   status: TranscriptionStatus;
   currentStep: TranscriptionStep;
@@ -95,6 +116,8 @@ export interface TranscriptionItemDto {
   processingTimeMs?: number;
   audioFileSizeBytes?: number;
   audioDurationSeconds?: number;
+  imageFilePath?: string;
+  imageFileSizeBytes?: number;
   errorMessage?: string;
   createdAt: Date;
   updatedAt: Date;
@@ -210,6 +233,7 @@ export class TranscriptionJobService implements OnModuleInit, OnModuleDestroy {
     private readonly logger: LoggerService,
     private readonly aesService: Aes256Service,
     private readonly notificationsService: NotificationsService,
+    private readonly aiUsageReportingService: AiUsageReportingService,
   ) {
     this.logger.setContext('TranscriptionJobService');
   }
@@ -280,7 +304,7 @@ export class TranscriptionJobService implements OnModuleInit, OnModuleDestroy {
   async createTranscriptionJob(
     params: CreateTranscriptionJobParams,
     workspaceId: string,
-  ): Promise<{ id: string; status: string; message: string }> {
+  ): Promise<{ mode: string; id: string; status: string; message: string }> {
     this.logger.log(
       `Creating background transcription: consultation=${params.consultationId}, doctor=${params.doctorId}`,
     );
@@ -345,9 +369,91 @@ export class TranscriptionJobService implements OnModuleInit, OnModuleDestroy {
     );
 
     return {
+      mode: 'BACKGROUND',
       id: transcription.id,
       status: TranscriptionStatus.PENDING,
       message: 'Audio file queued for background processing',
+    };
+  }
+
+  /**
+   * Create a background image analysis job.
+   * Mirrors createTranscriptionJob() but sets sourceType IMAGE.
+   */
+  async createImageAnalysisJob(
+    params: CreateImageAnalysisJobParams,
+    workspaceId: string,
+  ): Promise<{ mode: string; id: string; status: string; message: string }> {
+    this.logger.log(
+      `Creating background image analysis: consultation=${params.consultationId}, doctor=${params.doctorId}`,
+    );
+
+    const transcription = this.transcriptionRepo.create({
+      id: uuidv4(),
+      workspaceId,
+      doctorId: params.doctorId,
+      consultationId: params.consultationId,
+      audioFilePath: null,
+      imageFilePath: params.imageFilePath,
+      imageFileSizeBytes: params.imageFileSizeBytes || null,
+      sourceType: TranscriptionSourceType.IMAGE,
+      mode: TranscriptionMode.BACKGROUND,
+      status: TranscriptionStatus.PENDING,
+      currentStep: TranscriptionStep.UPLOAD,
+      provider: params.provider || AIProvider.OPENAI,
+      model: params.model || '',
+      temperature: params.temperature ?? 0.0,
+      language: params.language || 'en',
+      context: params.context || '',
+      noteType: params.noteType || null,
+      templateId: params.templateId || null,
+      patientName: params.patientName || null,
+      progressPercentage: 0,
+      progressMessage: 'Image file queued for analysis',
+      retryCount: 0,
+    } as any) as unknown as TranscriptionJob;
+
+    await this.transcriptionRepo.save(transcription);
+
+    this.logger.log(
+      `Background image analysis created: ${transcription.id}, triggering immediate processing`,
+    );
+
+    // Trigger immediate processing
+    setTimeout(() => {
+      this.processPendingTranscriptions().catch((err) => {
+        this.logger.error(
+          `Immediate processing trigger failed: ${err.message}`,
+          err.stack,
+        );
+      });
+    }, 100);
+
+    // Audit log
+    await this.safeAuditLog(
+      {
+        userId: params.doctorId,
+        action: 'createImageAnalysisJob',
+        eventType: AuditEventType.CREATE,
+        outcome: AuditOutcome.SUCCESS,
+        resourceType: 'TranscriptionJob',
+        resourceId: transcription.id,
+        metadata: {
+          action: NoteAuditActionType.AI_GENERATE,
+          consultationId: params.consultationId,
+          provider: params.provider,
+          mode: TranscriptionMode.BACKGROUND,
+          sourceType: TranscriptionSourceType.IMAGE,
+        },
+      },
+      workspaceId,
+    );
+
+    return {
+      mode: 'BACKGROUND',
+      id: transcription.id,
+      status: TranscriptionStatus.PENDING,
+      message: 'Image file queued for background analysis',
     };
   }
 
@@ -889,9 +995,10 @@ export class TranscriptionJobService implements OnModuleInit, OnModuleDestroy {
       .createQueryBuilder()
       .update(TranscriptionJob)
       .set({ status: TranscriptionStatus.PROCESSING, startedAt: new Date() })
-      .where('id = :jobId AND status = :pending', {
+      .where('id = :jobId AND status = :pending AND mode = :background', {
         jobId,
         pending: TranscriptionStatus.PENDING,
+        background: TranscriptionMode.BACKGROUND,
       })
       .execute();
 
@@ -947,28 +1054,50 @@ export class TranscriptionJobService implements OnModuleInit, OnModuleDestroy {
       this.gateway.emit(transcription.workspaceId, transcription.doctorId, this.buildEvent(transcription));
       this.logger.debug(`[${operationId}] Step 1/6: PROCESSING`);
 
-      // Step 2: Transcribe audio via AI with fallback (with timeout)
-      transcription.markAsTranscribing();
+      // Step 2: Transcribe audio or analyze image via AI with fallback (with timeout)
+      const isImageSource = transcription.sourceType === TranscriptionSourceType.IMAGE;
+
+      if (isImageSource) {
+        transcription.markAsProcessing();
+      } else {
+        transcription.markAsTranscribing();
+      }
       await this.encryptJobFields(transcription);
       await queryRunner.manager.save(TranscriptionJob, transcription);
       await this.decryptJobFields(transcription);
       this.gateway.emit(transcription.workspaceId, transcription.doctorId, this.buildEvent(transcription));
-      this.logger.debug(`[${operationId}] Step 2/6: TRANSCRIBING`);
+      this.logger.debug(`[${operationId}] Step 2/6: ${isImageSource ? 'ANALYZING IMAGE' : 'TRANSCRIBING'}`);
 
       const transcriptionResult: { text?: string; provider?: string; model?: string } =
-        await this.withTimeout(
-          (this.aiNoteService as any).transcribeWithFallback(
-            transcription.audioFilePath,
-            uuidv4(),
-            language,
-            provider,
-          ),
-          this.AI_CALL_TIMEOUT_MS,
-          `AI transcription timed out after ${this.AI_CALL_TIMEOUT_MS / 1000}s`,
-        );
+        isImageSource
+          ? await this.withTimeout(
+              (this.aiNoteService as any).analyzeImageWithFallback(
+                transcription.imageFilePath,
+                uuidv4(),
+                context,
+                language,
+                provider,
+                transcription.doctorId,
+                transcription.workspaceId,
+              ),
+              this.AI_CALL_TIMEOUT_MS,
+              `AI image analysis timed out after ${this.AI_CALL_TIMEOUT_MS / 1000}s`,
+            )
+          : await this.withTimeout(
+              (this.aiNoteService as any).transcribeWithFallback(
+                transcription.audioFilePath,
+                uuidv4(),
+                language,
+                provider,
+                transcription.doctorId,
+                transcription.workspaceId,
+              ),
+              this.AI_CALL_TIMEOUT_MS,
+              `AI transcription timed out after ${this.AI_CALL_TIMEOUT_MS / 1000}s`,
+            );
 
       if (!transcriptionResult || !transcriptionResult.text) {
-        throw new Error('Audio transcription returned empty result');
+        throw new Error(isImageSource ? 'Image analysis returned empty result' : 'Audio transcription returned empty result');
       }
 
       // Check if cancelled while AI was transcribing
@@ -1021,7 +1150,9 @@ export class TranscriptionJobService implements OnModuleInit, OnModuleDestroy {
               this.aiNoteService.generateStructuredTranscript({
                 rawText,
                 consultationId: transcription.consultationId,
-                audioFilePath: transcription.audioFilePath,
+                audioFilePath: isImageSource ? undefined : transcription.audioFilePath,
+                imageFilePath: isImageSource ? transcription.imageFilePath || undefined : undefined,
+                sourceType: isImageSource ? TranscriptionSourceType.IMAGE : TranscriptionSourceType.AUDIO,
                 provider: resolvedProvider,
                 model: resolvedModel,
                 userId: transcription.doctorId,
@@ -1056,11 +1187,13 @@ export class TranscriptionJobService implements OnModuleInit, OnModuleDestroy {
           } else {
             // Attempt 2: direct strategy call (bypasses service wrapper)
             const strategy = (this.aiNoteService as any).aiStrategyFactory.getStrategy(resolvedProvider);
+            const directStartTime = Date.now();
             const directResult: any = await this.withTimeout(
               strategy.generateStructuredTranscript(rawText, temperature, resolvedModel, context),
               this.AI_STRUCTURE_TIMEOUT_MS,
               `AI direct structuring timed out (attempt ${attempt})`,
             );
+            const directResponseTime = Date.now() - directStartTime;
 
             if (directResult?.choices?.[0]?.message?.content) {
               const candidateText = (directResult.choices[0].message.content as string).trim();
@@ -1076,6 +1209,19 @@ export class TranscriptionJobService implements OnModuleInit, OnModuleDestroy {
                     { structuredTranscript: encryptedStructured },
                   );
                 }
+                // Report usage (fire-and-forget)
+                const tokenUsage = (strategy as any).getLastTokenUsage?.() || { inputTokens: 0, outputTokens: 0, totalTokens: 0 };
+                this.aiUsageReportingService.reportUsage({
+                  userId: transcription.doctorId,
+                  workspaceId: transcription.workspaceId,
+                  provider: resolvedProvider,
+                  model: resolvedModel,
+                  operation: AiOperation.STRUCTURED_TRANSCRIPT,
+                  tokenUsage,
+                  responseTimeMs: directResponseTime,
+                  status: AiUsageStatus.COMPLETED,
+                  metadata: { context: 'processTranscription_directStrategy', attempt },
+                }).catch(() => {});
                 this.logger.log(
                   `[${operationId}] Attempt ${attempt} succeeded via direct strategy (len=${structuredText.length})`,
                 );
@@ -1110,7 +1256,9 @@ export class TranscriptionJobService implements OnModuleInit, OnModuleDestroy {
           doctorId: transcription.doctorId,
           consultationId: transcription.consultationId,
           transcribedText: rawText,
-          audioFilePath: transcription.audioFilePath,
+          audioFilePath: isImageSource ? null : transcription.audioFilePath,
+          imageFilePath: isImageSource ? transcription.imageFilePath : null,
+          sourceType: isImageSource ? TranscriptionSourceType.IMAGE : TranscriptionSourceType.AUDIO,
           structuredTranscript: structuredText,
           aiProvider: resolvedProvider,
           modelUsed: resolvedModel,
@@ -1418,6 +1566,7 @@ export class TranscriptionJobService implements OnModuleInit, OnModuleDestroy {
       startedAt:           t.startedAt || undefined,
       completedAt:         t.completedAt || undefined,
       updatedAt:           t.updatedAt ?? new Date(),
+      sourceType:          t.sourceType || undefined,
     };
   }
 
@@ -1428,6 +1577,7 @@ export class TranscriptionJobService implements OnModuleInit, OnModuleDestroy {
   private mapTranscriptionToDto(t: TranscriptionJob): TranscriptionItemDto {
     return {
       id: t.id,
+      sourceType: t.sourceType || undefined,
       mode: t.mode,
       status: t.status,
       currentStep: t.currentStep,
@@ -1445,6 +1595,8 @@ export class TranscriptionJobService implements OnModuleInit, OnModuleDestroy {
       processingTimeMs: t.processingTimeMs || undefined,
       audioFileSizeBytes: t.audioFileSizeBytes || undefined,
       audioDurationSeconds: t.audioDurationSeconds || undefined,
+      imageFilePath: t.imageFilePath || undefined,
+      imageFileSizeBytes: t.imageFileSizeBytes || undefined,
       errorMessage: t.errorMessage || undefined,
       createdAt: t.createdAt,
       updatedAt: t.updatedAt,

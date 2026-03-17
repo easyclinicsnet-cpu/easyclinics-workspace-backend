@@ -100,7 +100,10 @@ export class TranscriptionJobRepository extends EncryptedRepository<Transcriptio
    */
   async findAllPending(limit: number = 5): Promise<TranscriptionJob[]> {
     return this.find({
-      where: { status: TranscriptionStatus.PENDING },
+      where: {
+        status: TranscriptionStatus.PENDING,
+        mode: TranscriptionMode.BACKGROUND,
+      },
       order: { createdAt: 'ASC' },
       take: limit,
     });
