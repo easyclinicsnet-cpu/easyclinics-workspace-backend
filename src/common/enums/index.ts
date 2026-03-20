@@ -385,6 +385,7 @@ export enum TranscriptionStep {
   UPLOAD = 'UPLOAD',
   AUDIO_PROCESSING = 'AUDIO_PROCESSING',
   IMAGE_PROCESSING = 'IMAGE_PROCESSING',
+  DOCUMENT_PROCESSING = 'DOCUMENT_PROCESSING',
   TRANSCRIPTION = 'TRANSCRIPTION',
   STRUCTURING = 'STRUCTURING',
   SAVING = 'SAVING',
@@ -407,10 +408,12 @@ export enum TranscriptionMode {
 
 /**
  * Source type for transcription jobs.
- * AUDIO – Traditional audio-to-text transcription.
- * IMAGE – Image analysis via AI vision (OCR, clinical image interpretation).
+ * AUDIO    – Traditional audio-to-text transcription.
+ * IMAGE    – Image analysis via AI vision (OCR, clinical image interpretation).
+ * DOCUMENT – Text extraction from documents (PDF, DOCX) or images uploaded as docs.
  */
 export enum TranscriptionSourceType {
-  AUDIO = 'AUDIO',
-  IMAGE = 'IMAGE',
+  AUDIO    = 'AUDIO',
+  IMAGE    = 'IMAGE',
+  DOCUMENT = 'DOCUMENT',
 }

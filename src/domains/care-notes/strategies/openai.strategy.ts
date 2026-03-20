@@ -40,6 +40,10 @@ export class OpenAiStrategy {
   private openai: OpenAI;
   private readonly logger: LoggerService;
   private readonly defaultGenerationModel = 'gpt-4-turbo';
+
+  /** Models that require the Responses API (/v1/responses) instead of Chat Completions */
+  private readonly responsesApiModels = ['gpt-5.4', 'gpt-5.4-mini', 'gpt-5.4-nano'];
+
   private readonly supportedChatModels = [
     'gpt-5',
     'gpt-4o',
@@ -587,18 +591,8 @@ export class OpenAiStrategy {
     return new Promise((resolve) => setTimeout(resolve, ms));
   }
 
-  async generateStructuredTranscript(
-    text: string,
-    temperature: number,
-    model: string,
-    context: string,
-  ): Promise<OpenAI.Chat.Completions.ChatCompletion> {
-    this.logger.debug(`ChatModel: ${model}, temperature: ${temperature}`);
-
-    const messages: OpenAIChatMessage[] = [
-      {
-        role: 'system',
-        content: `You are an AI medical assistant designed to assist doctors in creating detailed and accurate case notes based on patient transcriptions.
+  /** System prompt shared by both Chat Completions and Responses API paths */
+  private readonly structuredTranscriptSystemPrompt = `You are an AI medical assistant designed to assist doctors in creating detailed and accurate case notes based on patient transcriptions.
       Your primary task is to analyze the transcription, extract relevant information, and organize it into a structured and professional medical note that is clear, and ready for the doctor to review and edit.
       The output should adhere to medical documentation standards and use proper medical terminology. N.B: Do not put asterisk on and sub section e.g. **Social History:**
       Ensure the output is structured in a way that includes clearly labeled sections. If treatments are prescribed, write them nicely and then provide them under Treatment(s) Prescribed section.
@@ -646,11 +640,11 @@ export class OpenAiStrategy {
        - Clearly distinguish between admission orders and ongoing treatment
        - Include monitoring parameters (vitals, labs, imaging)
        - Note any consults or referrals
-       - Document procedures performed or planned`,
-      },
-      {
-        role: 'user',
-        content: `The following is a transcription of a real-time session between a doctor and a patient. This may include inpatient encounters with detailed medication orders and treatment plans.
+       - Document procedures performed or planned`;
+
+  /** Build the user prompt for structured transcript generation */
+  private buildStructuredTranscriptUserPrompt(text: string, context: string): string {
+    return `The following is a transcription of a real-time session between a doctor and a patient. This may include inpatient encounters with detailed medication orders and treatment plans.
 
     Patient transcription: "${text}".
     Additional Patient context provided: "${context}"
@@ -691,8 +685,72 @@ export class OpenAiStrategy {
 
     PRN Medications:
     1. Ondansetron 4mg IV q8h PRN for nausea/vomiting
-    2. Morphine 2mg IV q4h PRN for severe pain`,
-      },
+    2. Morphine 2mg IV q4h PRN for severe pain`;
+  }
+
+  async generateStructuredTranscript(
+    text: string,
+    temperature: number,
+    model: string,
+    context: string,
+  ): Promise<OpenAI.Chat.Completions.ChatCompletion> {
+    this.logger.debug(`ChatModel: ${model}, temperature: ${temperature}`);
+
+    // ── Responses API path for gpt-5.4 family ──────────────────────────
+    if (this.requiresResponsesApi(model)) {
+      this.logger.log(`Using Responses API for model ${model}`);
+
+      try {
+        const result = await this.callResponsesApi({
+          model,
+          instructions: this.structuredTranscriptSystemPrompt,
+          input: this.buildStructuredTranscriptUserPrompt(text, context),
+          temperature,
+          maxOutputTokens: 4000,
+        });
+
+        // Return a ChatCompletion-compatible shim so callers don't need to change
+        return {
+          id: `resp-${Date.now()}`,
+          object: 'chat.completion',
+          created: Math.floor(Date.now() / 1000),
+          model,
+          choices: [{
+            index: 0,
+            message: { role: 'assistant' as const, content: result.text, refusal: null },
+            finish_reason: 'stop',
+            logprobs: null,
+          }],
+          usage: {
+            prompt_tokens: result.usage.inputTokens,
+            completion_tokens: result.usage.outputTokens,
+            total_tokens: result.usage.totalTokens,
+          },
+        } as OpenAI.Chat.Completions.ChatCompletion;
+      } catch (error) {
+        this.logger.error('Responses API structured transcript error', this.extractErrorMessage(error));
+
+        if (this.isConnectionError(error)) {
+          throw new Error('Failed to connect to OpenAI API. Please check your internet connection.');
+        }
+
+        if (error instanceof OpenAI.APIError) {
+          switch (error.status) {
+            case 401: throw new Error('OpenAI API authentication failed');
+            case 429: throw new Error('OpenAI API rate limit exceeded');
+            case 500: throw new Error('OpenAI API server error');
+            default:  throw new Error(`OpenAI API error: ${error.message}`);
+          }
+        }
+
+        throw error;
+      }
+    }
+
+    // ── Chat Completions path for gpt-4-turbo, gpt-4o, etc. ───────────
+    const messages: OpenAIChatMessage[] = [
+      { role: 'system', content: this.structuredTranscriptSystemPrompt },
+      { role: 'user',   content: this.buildStructuredTranscriptUserPrompt(text, context) },
     ];
 
     try {
@@ -777,28 +835,66 @@ export class OpenAiStrategy {
     maxTokens?: number;
   }): Promise<Record<string, any>> {
     const operationId = `generate_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    // Validate and select appropriate model for generation (outside try so catch can reference it)
+    const modelToUse = this.validateAndSelectModel(options.model);
 
+    // Input validation (before API path split)
+    if (!options.content || options.content.trim().length === 0) {
+      throw new Error('Content cannot be empty for note generation');
+    }
+    if (options.temperature && (options.temperature < 0 || options.temperature > 2)) {
+      throw new Error('Temperature must be between 0 and 2');
+    }
+    if (options.maxTokens && options.maxTokens < 1) {
+      throw new Error('Max tokens must be a positive number');
+    }
+
+    // ── Responses API path for gpt-5.4 family ──────────────────────────
+    if (this.requiresResponsesApi(modelToUse)) {
+      this.logger.log(`[${operationId}] Using Responses API for note generation with ${modelToUse}`);
+
+      try {
+        const result = await this.callResponsesApi({
+          model: modelToUse,
+          instructions: this.buildSystemPrompt(options.noteType),
+          input: this.buildUserPrompt(options),
+          temperature: options.temperature || 0.0,
+          maxOutputTokens: options.maxTokens || 4000,
+          jsonMode: true,
+        });
+
+        // Parse JSON from the response text
+        const extractedJson = this.extractJsonFromResponse(result.text);
+        if (!extractedJson) {
+          throw new Error('No JSON content could be extracted from Responses API output');
+        }
+
+        let parsedResult = JSON.parse(extractedJson);
+        this.validateNoteStructure(parsedResult, options.noteType);
+        parsedResult = this.normalizeNoteContent(parsedResult, options.noteType);
+
+        this.logger.log(`[${operationId}] Note generation via Responses API completed successfully`);
+        return parsedResult;
+      } catch (error) {
+        this.logger.error(`[${operationId}] Responses API note generation failed`, this.extractErrorMessage(error));
+
+        if (error instanceof OpenAI.APIError) {
+          switch (error.status) {
+            case 401: throw new Error('OpenAI API authentication failed');
+            case 429: throw new Error('OpenAI API rate limit exceeded');
+            case 500: throw new Error('OpenAI API server error');
+            default:  throw new Error(`OpenAI API error: ${error.message}`);
+          }
+        }
+
+        throw error;
+      }
+    }
+
+    // ── Chat Completions path for gpt-4-turbo, gpt-4o, etc. ───────────
     try {
-      // Validate and select appropriate model for generation
-      const modelToUse = this.validateAndSelectModel(options.model);
 
       this.logger.log(`[${operationId}] Starting note generation`);
-
-      // Input validation
-      if (!options.content || options.content.trim().length === 0) {
-        throw new Error('Content cannot be empty for note generation');
-      }
-
-      if (
-        options.temperature &&
-        (options.temperature < 0 || options.temperature > 2)
-      ) {
-        throw new Error('Temperature must be between 0 and 2');
-      }
-
-      if (options.maxTokens && options.maxTokens < 1) {
-        throw new Error('Max tokens must be a positive number');
-      }
 
       this.logger.debug(`ChatModel: ${modelToUse}, temperature: ${options.temperature || 0.0}`);
 
@@ -1959,6 +2055,62 @@ Generate a SOAP NOTE in JSON format with this structure:
     }
 
     return requestedModel;
+  }
+
+  /**
+   * Check if a model requires the Responses API instead of Chat Completions.
+   */
+  private requiresResponsesApi(model: string): boolean {
+    return this.responsesApiModels.some((m) =>
+      model.toLowerCase() === m.toLowerCase(),
+    );
+  }
+
+  /**
+   * Call OpenAI Responses API (/v1/responses) for models like gpt-5.4.
+   * Returns text output and token usage in a normalised shape.
+   */
+  private async callResponsesApi(options: {
+    model: string;
+    instructions: string;
+    input: string;
+    temperature?: number;
+    maxOutputTokens?: number;
+    jsonMode?: boolean;
+  }): Promise<{ text: string; usage: { inputTokens: number; outputTokens: number; totalTokens: number } }> {
+    const operationId = `responses_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`;
+
+    this.logger.log(`[${operationId}] Calling Responses API with model=${options.model}`);
+
+    const response = await this.retryOperation(
+      async () => {
+        return await this.openai.responses.create({
+          model: options.model as any,
+          instructions: options.instructions,
+          input: options.input,
+          temperature: options.temperature ?? 0,
+          max_output_tokens: options.maxOutputTokens || 4000,
+          ...(options.jsonMode ? { text: { format: { type: 'json_object' as const } } } : {}),
+        });
+      },
+      'responses API',
+      operationId,
+    );
+
+    const text = response.output_text ?? '';
+    const usage = {
+      inputTokens: response.usage?.input_tokens || 0,
+      outputTokens: response.usage?.output_tokens || 0,
+      totalTokens: (response.usage?.input_tokens || 0) + (response.usage?.output_tokens || 0),
+    };
+
+    this.lastTokenUsage = usage;
+
+    this.logger.log(
+      `[${operationId}] Responses API complete: ${usage.totalTokens} tokens`,
+    );
+
+    return { text, usage };
   }
 
   /**

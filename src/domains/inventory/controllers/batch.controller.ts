@@ -20,9 +20,15 @@
  *   GET    /                          — list (paginated, filtered)
  *   GET    /expiring                  — expiring within ?days (default threshold)
  *   GET    /expired                   — already expired
+ *   GET    /statistics/summary        — aggregate batch counts & stock value
+ *   GET    /alerts/statistics         — alert counts (expired, critical, quarantined, QC failed)
+ *   GET    /dashboard                 — combined statistics + alerts
+ *   GET    /low-stock/:threshold      — batches below stock threshold percentage
  *   GET    /available/:itemType/:itemId — available batches for a specific item
+ *   POST   /:id/adjust-quantity       — add/remove quantity with audit trail
+ *   PATCH  /:id/delete                — soft-delete (zero-stock batches only)
  *   PATCH  /:id                       — update batch
- *   GET    /:id                       — get by UUID (LAST — no delete on BatchService)
+ *   GET    /:id                       — get by UUID (LAST)
  */
 
 import {
@@ -199,6 +205,38 @@ export class BatchController {
   }
 
   // ==========================================================================
+  // STATISTICS
+  // ==========================================================================
+
+  @Get('statistics/summary')
+  @Roles(...VIEWER_ROLES)
+  @Permissions('inventory:read')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    operationId: 'batches_statisticsSummary',
+    summary:     'Batch statistics summary',
+    description: 'Returns aggregate batch counts and stock value for the workspace dashboard.',
+  })
+  @ApiResponse({ status: 200, description: 'Statistics summary' })
+  async getStatisticsSummary(@Req() req: Request): Promise<Record<string, any>> {
+    return this.batchService.getStatisticsSummary(req.workspaceId);
+  }
+
+  @Get('alerts/statistics')
+  @Roles(...VIEWER_ROLES)
+  @Permissions('inventory:read')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    operationId: 'batches_alertsStatistics',
+    summary:     'Batch alert statistics',
+    description: 'Returns counts for batch-level alerts: expired, critical expiry, warning expiry, quarantined, quality failed, depleted.',
+  })
+  @ApiResponse({ status: 200, description: 'Alert statistics' })
+  async getAlertsStatistics(@Req() req: Request): Promise<Record<string, any>> {
+    return this.batchService.getAlertsStatistics(req.workspaceId);
+  }
+
+  // ==========================================================================
   // AVAILABLE BATCHES BY ITEM — 3-segment route, no collision with /:id
   // ==========================================================================
 
@@ -222,6 +260,112 @@ export class BatchController {
     @Req()                          req:      Request,
   ): Promise<BatchResponseDto[]> {
     return this.batchService.findAvailableForItem(req.workspaceId, itemId, itemType);
+  }
+
+  // ==========================================================================
+  // DASHBOARD (combined stats + alerts)
+  // ==========================================================================
+
+  @Get('dashboard')
+  @Roles(...VIEWER_ROLES)
+  @Permissions('inventory:read')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    operationId: 'batches_dashboard',
+    summary:     'Get batch dashboard data',
+    description: 'Returns combined statistics and alerts for the inventory dashboard.',
+  })
+  @ApiResponse({ status: 200, description: 'Dashboard data' })
+  async getDashboard(@Req() req: Request): Promise<Record<string, any>> {
+    return this.batchService.getDashboard(req.workspaceId);
+  }
+
+  // ==========================================================================
+  // LOW STOCK
+  // ==========================================================================
+
+  @Get('low-stock/:threshold')
+  @Roles(...VIEWER_ROLES)
+  @Permissions('inventory:read')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    operationId: 'batches_lowStock',
+    summary:     'Get low-stock batches',
+    description: 'Returns batches with available quantity below the given threshold percentage of initial quantity.',
+  })
+  @ApiParam({ name: 'threshold', description: 'Stock threshold percentage (0-100)', type: Number })
+  @ApiQuery({ name: 'page',  required: false, type: Number })
+  @ApiQuery({ name: 'limit', required: false, type: Number })
+  @ApiResponse({ status: 200, description: 'Paginated low-stock batches' })
+  async getLowStock(
+    @Param('threshold') threshold: string,
+    @Query('page')  page:  string | undefined,
+    @Query('limit') limit: string | undefined,
+    @Req()          req:   Request,
+  ): Promise<IPaginatedResult<BatchResponseDto>> {
+    return this.batchService.findLowStock(
+      req.workspaceId,
+      Number(threshold),
+      page ? Number(page) : 1,
+      limit ? Number(limit) : 25,
+    );
+  }
+
+  // ==========================================================================
+  // ADJUST QUANTITY
+  // ==========================================================================
+
+  @Post(':id/adjust-quantity')
+  @Roles(...WRITE_ROLES)
+  @Permissions('inventory:write')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    operationId: 'batches_adjustQuantity',
+    summary:     'Adjust batch quantity',
+    description: 'Adds or removes quantity from a batch. Updates both the batch and parent item stock levels. Requires a reason for audit.',
+  })
+  @ApiParam({ name: 'id', description: 'Batch UUID', type: String, format: 'uuid' })
+  @ApiQuery({ name: 'quantity',       required: true, type: Number, description: 'Positive quantity to adjust' })
+  @ApiQuery({ name: 'adjustmentType', required: true, enum: ['ADD', 'REMOVE'] })
+  @ApiQuery({ name: 'reason',         required: true, type: String, description: 'Reason for adjustment' })
+  @ApiResponse({ status: 200, description: 'Adjusted batch', type: BatchResponseDto })
+  @ApiResponse({ status: 404, description: 'Batch not found' })
+  @ApiResponse({ status: 409, description: 'Insufficient stock for removal' })
+  async adjustQuantity(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Query('quantity')       quantity:       string,
+    @Query('adjustmentType') adjustmentType: 'ADD' | 'REMOVE',
+    @Query('reason')         reason:         string,
+    @Req()                   req:            Request,
+  ): Promise<BatchResponseDto> {
+    return this.batchService.adjustQuantity(
+      req.workspaceId, id, Number(quantity), adjustmentType, reason, req.userId,
+    );
+  }
+
+  // ==========================================================================
+  // SOFT DELETE
+  // ==========================================================================
+
+  @Patch(':id/delete')
+  @Roles(...WRITE_ROLES)
+  @Permissions('inventory:write')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    operationId: 'batches_softDelete',
+    summary:     'Soft-delete batch',
+    description: 'Marks a batch as deleted. Only works on batches with zero available stock.',
+  })
+  @ApiParam({ name: 'id', description: 'Batch UUID', type: String, format: 'uuid' })
+  @ApiResponse({ status: 200, description: 'Deleted batch', type: BatchResponseDto })
+  @ApiResponse({ status: 404, description: 'Batch not found' })
+  @ApiResponse({ status: 409, description: 'Cannot delete batch with remaining stock' })
+  async softDelete(
+    @Param('id', ParseUUIDPipe) id:  string,
+    @Body()                     body: { reason?: string },
+    @Req()                      req:  Request,
+  ): Promise<BatchResponseDto> {
+    return this.batchService.softDelete(req.workspaceId, id, req.userId, body?.reason);
   }
 
   // ==========================================================================

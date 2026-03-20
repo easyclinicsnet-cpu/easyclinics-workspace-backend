@@ -16,6 +16,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { LoggerService } from '../../../common/logger/logger.service';
 import { FileStorageService } from '../../../common/storage/file-storage.service';
 import { AuditLogService } from '../../audit/services/audit-log.service';
+import { NoteAuditService } from './note-audit.service';
 
 import { CareNoteRepository } from '../repositories/care-note.repository';
 import { RecordingsTranscriptRepository } from '../repositories/recordings-transcript.repository';
@@ -30,6 +31,8 @@ import { TranscriptionJob } from '../entities/transcription-job.entity';
 
 import { AiStrategyFactory } from '../strategies/ai-strategy.factory';
 import { AiUsageReportingService, AiOperation, AiUsageStatus } from './ai-usage-reporting.service';
+import { DocumentExtractionService } from './document-extraction.service';
+import { UpdateTranscriptWithDocumentDto } from '../dto/update-transcript-with-document.dto';
 
 import { CareNote } from '../entities/care-note.entity';
 import { RecordingsTranscript } from '../entities/recordings-transcript.entity';
@@ -80,6 +83,7 @@ interface ProcessAudioDto {
   isBackgroundProcessing?: boolean;
   context?: string;
   patientName?: string;
+  audioDurationSeconds?: number;
 }
 
 /**
@@ -159,6 +163,7 @@ interface UpdateTranscriptWithAudioDto {
   temperature?: number;
   mergeStrategy?: 'append' | 'replace';
   context?: string;
+  audioDurationSeconds?: number;
 }
 
 /**
@@ -271,12 +276,14 @@ export class AiNoteService {
     @Inject(forwardRef(() => TranscriptionJobService))
     private readonly transcriptionJobService: TranscriptionJobService,
     private readonly auditLogService: AuditLogService,
+    private readonly noteAuditService: NoteAuditService,
     private readonly configService: ConfigService,
     private readonly logger: LoggerService,
     private readonly notificationsService: NotificationsService,
     @InjectDataSource()
     private readonly dataSource: DataSource,
     private readonly aiUsageReportingService: AiUsageReportingService,
+    private readonly documentExtractionService: DocumentExtractionService,
   ) {
     this.logger.setContext('AiNoteService');
     this.logger.log('AiNoteService initialized');
@@ -388,12 +395,16 @@ export class AiNoteService {
       job.markAsTranscribed(transcriptionResult.text);
       job.markAsStructuring();
 
+      // Use the DTO's requested model (or provider default) for text generation,
+      // NOT transcriptionResult.model which is 'whisper-1' (audio-only model).
+      const generationModel = dto.model || this.getDefaultModel(transcriptionResult.provider);
+
       const structuredTranscript = await this.generateStructuredTranscript({
         rawText: transcriptionResult.text,
         consultationId: dto.consultationId,
         audioFilePath: filePath,
         provider: transcriptionResult.provider,
-        model: transcriptionResult.model,
+        model: generationModel,
         userId,
         workspaceId,
         context: dto.context,
@@ -572,13 +583,17 @@ export class AiNoteService {
       job.markAsTranscribed(analysisResult.text);
       job.markAsStructuring();
 
+      // Use the DTO's requested model (or provider default) for text generation,
+      // NOT analysisResult.model which is the vision/image model (e.g. gpt-4-turbo).
+      const generationModel = dto.model || this.getDefaultModel(analysisResult.provider);
+
       const structuredTranscript = await this.generateStructuredTranscript({
         rawText: analysisResult.text,
         consultationId: dto.consultationId,
         imageFilePath: filePath,
         sourceType: TranscriptionSourceType.IMAGE,
         provider: analysisResult.provider,
-        model: analysisResult.model,
+        model: generationModel,
         userId,
         workspaceId,
         context: dto.context,
@@ -994,7 +1009,7 @@ export class AiNoteService {
         `Note regenerated successfully: ${noteId}, new version=${updatedNote.version}`,
       );
 
-      // Audit log (outside transaction)
+      // Audit log (outside transaction) — general + note-specific
       await this.safeAuditLog(
         {
           userId,
@@ -1011,6 +1026,20 @@ export class AiNoteService {
           },
         },
         workspaceId,
+      );
+
+      await this.safeNoteAuditLog(
+        noteId,
+        userId,
+        NoteAuditActionType.AI_GENERATE,
+        workspaceId,
+        {
+          noteType,
+          reason: dto.reason,
+          newVersion: updatedNote.version,
+          regeneration: true,
+        },
+        ['content', 'structuredContent', 'version'],
       );
 
       return updatedNote;
@@ -1285,6 +1314,20 @@ export class AiNoteService {
           associatedNoteCount: associatedNotes.length,
         },
       }, workspaceId);
+
+      // Note-specific audit log for each associated note that was soft-deleted
+      for (const note of associatedNotes) {
+        await this.safeNoteAuditLog(
+          note.id,
+          userId,
+          NoteAuditActionType.DELETE,
+          workspaceId,
+          {
+            consultationId: transcript.consultationId,
+            deletedViaTranscript: transcriptId,
+          },
+        );
+      }
     } catch (error) {
       await queryRunner.rollbackTransaction();
       this.logger.error(
@@ -1424,6 +1467,19 @@ export class AiNoteService {
           hasModifications: !!dto.modifications,
         },
       }, workspaceId);
+
+      await this.safeNoteAuditLog(
+        noteId,
+        userId,
+        auditAction,
+        workspaceId,
+        {
+          reason: dto.reason,
+          hasModifications: !!dto.modifications,
+          newStatus: updatedNote.status,
+        },
+        ['status', 'version'],
+      );
 
       return updatedNote;
     } catch (error) {
@@ -1733,7 +1789,7 @@ export class AiNoteService {
         `Note generated and saved successfully: ${savedNote.id}, type=${params.noteType}`,
       );
 
-      // Audit log (outside transaction)
+      // Audit log (outside transaction) — general + note-specific
       await this.safeAuditLog(
         {
           userId: params.userId,
@@ -1753,6 +1809,24 @@ export class AiNoteService {
           },
         },
         params.workspaceId,
+      );
+
+      // Note-specific audit log for the NoteAuditLog table
+      await this.safeNoteAuditLog(
+        savedNote.id,
+        params.userId,
+        NoteAuditActionType.AI_GENERATE,
+        params.workspaceId,
+        {
+          noteType: params.noteType,
+          consultationId: params.consultationId,
+          aiProvider: resolvedProvider,
+          model: resolvedModel,
+          generationTimeMs: generationTime,
+          isUpdate: !!params.existingNoteId || !!existingDraft,
+        },
+        undefined,          // changedFields
+        params.patientId,   // patientId — propagated from the controller
       );
 
       return savedNote;
@@ -2185,6 +2259,410 @@ export class AiNoteService {
       throw error;
     } finally {
       await qr.release();
+    }
+  }
+
+  // ===========================================================================
+  // UPDATE TRANSCRIPT WITH DOCUMENT (PDF / DOCX / Image)
+  // ===========================================================================
+
+  /**
+   * Extract text from a document (PDF, DOCX, or image) and merge it into an
+   * existing transcript, or create a new transcript from an AI note source.
+   *
+   * For **images** the existing AI vision pipeline is used (analyzeImage).
+   * For **PDF** and **DOCX** pure text extraction is used (pdf-parse / mammoth).
+   *
+   * @param dto      - Document merge configuration
+   * @param filePath - Path to the uploaded document on disk
+   * @param userId   - Authenticated user ID
+   * @param workspaceId - Tenant workspace ID
+   * @returns Updated or newly created transcript
+   */
+  async updateTranscriptWithDocument(
+    dto: UpdateTranscriptWithDocumentDto,
+    filePaths: string[],
+    userId: string,
+    workspaceId: string,
+  ): Promise<any> {
+    if (!filePaths || filePaths.length === 0) {
+      throw new BadRequestException('No document file(s) uploaded');
+    }
+    if (!dto.transcriptId && !dto.aiNoteSourceId) {
+      throw new BadRequestException(
+        'Either transcriptId or aiNoteSourceId must be provided',
+      );
+    }
+
+    // Accept both "strategy" (Flutter client) and "mergeStrategy" field names.
+    const mergeStrategy = dto.mergeStrategy || dto.strategy || 'append';
+    this.logger.log(
+      `updateTranscriptWithDocument: ${filePaths.length} file(s), strategy=${mergeStrategy}`,
+    );
+
+    // ── 1. Validate all files up-front ──────────────────────────────────────
+    const validations = filePaths.map(fp =>
+      this.documentExtractionService.validateDocumentFile(fp),
+    );
+
+    // ── 2. Extract text from every document & concatenate ───────────────────
+    const extractedParts: string[] = [];
+    let resolvedProvider: AIProvider = (dto.provider as AIProvider) ?? AIProvider.OPENAI;
+    let resolvedModel: string = dto.model ?? '';
+    let lastDocType: string = validations[0].type;
+    let totalSizeBytes = 0;
+
+    for (let i = 0; i < filePaths.length; i++) {
+      const filePath = filePaths[i];
+      const { type: docType, sizeBytes } = validations[i];
+      lastDocType = docType;
+      totalSizeBytes += sizeBytes;
+
+      this.logger.log(
+        `  [${i + 1}/${filePaths.length}] type=${docType}, size=${sizeBytes}`,
+      );
+
+      const extraction = await this.documentExtractionService.extractText(filePath);
+
+      if (extraction) {
+        // PDF or DOCX — text already extracted, no AI needed
+        extractedParts.push(extraction.text);
+      } else {
+        // Image — route through AI vision pipeline
+        const fallbackResult = await this.aiStrategyFactory.getStrategyWithFallback(
+          resolvedProvider,
+        );
+        const visionStrategy = fallbackResult.strategy;
+        const visionStart = Date.now();
+        const visionResult = await visionStrategy.analyzeImage(
+          filePath,
+          dto.context,
+          dto.language ?? 'en',
+        );
+        const visionTime = Date.now() - visionStart;
+
+        extractedParts.push(visionResult.text);
+        resolvedProvider = fallbackResult.provider;
+        resolvedModel = resolvedModel || this.getDefaultModel(resolvedProvider);
+
+        // Report vision usage (fire-and-forget)
+        const tokenUsage = (visionStrategy as any).getLastTokenUsage?.() || {
+          inputTokens: 0,
+          outputTokens: 0,
+          totalTokens: 0,
+        };
+        this.aiUsageReportingService.reportUsage({
+          userId,
+          workspaceId,
+          provider: resolvedProvider,
+          model: resolvedModel,
+          operation: AiOperation.IMAGE_ANALYSIS,
+          tokenUsage,
+          responseTimeMs: visionTime,
+          status: AiUsageStatus.COMPLETED,
+          metadata: { context: 'updateTranscriptWithDocument', fileIndex: i },
+        }).catch(() => {});
+      }
+    }
+
+    // Combine extracted text from all documents
+    const extractedText = extractedParts.filter(t => t?.trim()).join('\n\n---\n\n');
+    const docType = filePaths.length === 1 ? lastDocType : 'mixed';
+    const sizeBytes = totalSizeBytes;
+
+    if (!extractedText?.trim()) {
+      throw new BadRequestException(
+        'No text could be extracted from the uploaded document(s)',
+      );
+    }
+
+    // ── Path A: aiNoteSourceId — create new transcript ────────────────────
+    if (dto.aiNoteSourceId && !dto.transcriptId) {
+      return this._createTranscriptFromDocumentSource(
+        dto, extractedText, docType, filePaths[0], sizeBytes,
+        resolvedProvider, resolvedModel, userId, workspaceId,
+      );
+    }
+
+    // ── Path B: transcriptId — update existing transcript ─────────────────
+    this.logger.log(`Updating transcript with document: ${dto.transcriptId}`);
+
+    const queryRunner = this.dataSource.createQueryRunner();
+    await queryRunner.connect();
+    await queryRunner.startTransaction();
+
+    try {
+      const existingTranscript = await queryRunner.manager.findOne(
+        RecordingsTranscript,
+        { where: { id: dto.transcriptId, workspaceId } },
+      );
+      if (!existingTranscript) {
+        throw new NotFoundException(`Transcript not found: ${dto.transcriptId}`);
+      }
+
+      // Merge with existing content (mergeStrategy already resolved above)
+      let mergedText: string;
+
+      if (mergeStrategy === 'replace') {
+        mergedText = await this.replaceTranscript(
+          existingTranscript.transcribedText,
+          extractedText,
+          dto.context,
+          dto.model,
+          dto.temperature,
+          userId,
+          workspaceId,
+        );
+      } else {
+        mergedText = await this.appendToTranscript(
+          existingTranscript.transcribedText,
+          extractedText,
+          dto.context,
+          dto.model,
+          dto.temperature,
+          userId,
+          workspaceId,
+        );
+      }
+
+      // Update transcript
+      existingTranscript.transcribedText = mergedText;
+      existingTranscript.documentFilePath = filePaths.join(',');
+      existingTranscript.documentType = docType;
+      existingTranscript.sourceType = 'DOCUMENT';
+
+      // If we used AI vision for an image, also record the provider
+      if (docType === 'image') {
+        existingTranscript.aiProvider = resolvedProvider;
+        existingTranscript.modelUsed = resolvedModel || this.getDefaultModel(resolvedProvider);
+      }
+
+      // Generate new structured transcript
+      const temperature = dto.temperature ?? 0.7;
+      const model = resolvedModel || dto.model || this.getDefaultModel(resolvedProvider);
+
+      try {
+        const strategyInstance = await this.aiStrategyFactory.getStrategy(resolvedProvider);
+        const structStart = Date.now();
+        const structuredResult = await strategyInstance.generateStructuredTranscript(
+          mergedText,
+          temperature,
+          model,
+          dto.context || '',
+        );
+        const structTime = Date.now() - structStart;
+
+        if (structuredResult?.choices?.[0]?.message?.content) {
+          existingTranscript.structuredTranscript = this.cleanContent(
+            structuredResult.choices[0].message.content,
+          );
+        }
+
+        // Report structuring usage (fire-and-forget)
+        const tokenUsage = (strategyInstance as any).getLastTokenUsage?.() || {
+          inputTokens: 0, outputTokens: 0, totalTokens: 0,
+        };
+        this.aiUsageReportingService.reportUsage({
+          userId,
+          workspaceId,
+          provider: resolvedProvider,
+          model,
+          operation: AiOperation.STRUCTURED_TRANSCRIPT,
+          tokenUsage,
+          responseTimeMs: structTime,
+          status: AiUsageStatus.COMPLETED,
+          metadata: { context: 'updateTranscriptWithDocument' },
+        }).catch(() => {});
+      } catch (structuredError) {
+        this.logger.warn(
+          `Failed to structure document transcript: ${structuredError.message}`,
+        );
+        existingTranscript.structuredTranscript = mergedText;
+      }
+
+      const updatedTranscript = await queryRunner.manager.save(
+        RecordingsTranscript,
+        existingTranscript,
+      );
+      await queryRunner.commitTransaction();
+
+      this.logger.log(
+        `Transcript updated with document successfully: ${dto.transcriptId}`,
+      );
+
+      await this.safeAuditLog({
+        userId,
+        action: 'updateTranscriptWithDocument',
+        eventType: AuditEventType.UPDATE,
+        outcome: AuditOutcome.SUCCESS,
+        resourceType: 'RecordingsTranscript',
+        resourceId: dto.transcriptId,
+        metadata: {
+          action: NoteAuditActionType.UPDATE,
+          mergeStrategy,
+          documentType: docType,
+          documentCount: filePaths.length,
+          documentSizeBytes: sizeBytes,
+          provider: resolvedProvider,
+          model,
+        },
+      }, workspaceId);
+
+      return {
+        ...this.mapToTranscriptDto(updatedTranscript),
+        extractedText,
+        mergeStrategy,
+        documentType: docType,
+      };
+    } catch (error) {
+      await queryRunner.rollbackTransaction();
+      this.logger.error(
+        `Failed to update transcript with document: ${error.message}`,
+        error.stack,
+      );
+      throw error;
+    } finally {
+      await queryRunner.release();
+      // Clean up temp file (fire-and-forget)
+      // Temp document file kept for audit; OS temp-dir cleanup handles removal.
+    }
+  }
+
+  /**
+   * Create a new RecordingsTranscript from document-extracted text merged
+   * with an existing CareAiNoteSource.sourceContent.
+   */
+  private async _createTranscriptFromDocumentSource(
+    dto: UpdateTranscriptWithDocumentDto,
+    extractedText: string,
+    docType: string,
+    filePath: string,
+    sizeBytes: number,
+    resolvedProvider: AIProvider,
+    resolvedModel: string,
+    userId: string,
+    workspaceId: string,
+  ): Promise<any> {
+    this.logger.log(`Creating transcript from document + ai note source: ${dto.aiNoteSourceId}`);
+
+    const qr = this.dataSource.createQueryRunner();
+    await qr.connect();
+    await qr.startTransaction();
+
+    try {
+      // 1. Load ai_note_source
+      const aiSource = await qr.manager.findOne(CareAiNoteSource, {
+        where: { id: dto.aiNoteSourceId, workspaceId, deletedAt: IsNull() },
+      });
+      if (!aiSource) {
+        throw new NotFoundException(`AI note source not found: ${dto.aiNoteSourceId}`);
+      }
+
+      // 2. Resolve consultationId
+      const note = await qr.manager.findOne(CareNote, {
+        where: { id: aiSource.noteId, workspaceId },
+      });
+      const consultationId = note?.consultationId;
+      if (!consultationId) {
+        throw new BadRequestException(
+          'Could not resolve consultationId for transcript creation',
+        );
+      }
+
+      // 3. Merge extracted text with source content
+      const existingContent = this.stripMarkdown(aiSource.sourceContent ?? '');
+      const mergeStrategy = dto.mergeStrategy ?? 'append';
+      let mergedText: string;
+
+      if (mergeStrategy === 'replace') {
+        mergedText = await this.replaceTranscript(
+          existingContent, extractedText, dto.context,
+          dto.model, dto.temperature, userId, workspaceId,
+        );
+      } else {
+        mergedText = await this.appendToTranscript(
+          existingContent, extractedText, dto.context,
+          dto.model, dto.temperature, userId, workspaceId,
+        );
+      }
+
+      // 4. Generate structured transcript
+      const temperature = dto.temperature ?? 0.7;
+      const model = resolvedModel || dto.model || this.getDefaultModel(resolvedProvider);
+      let structuredText = mergedText;
+      try {
+        const strategyInstance = await this.aiStrategyFactory.getStrategy(resolvedProvider);
+        const structuredResult = await strategyInstance.generateStructuredTranscript(
+          mergedText, temperature, model, dto.context || '',
+        );
+        if (structuredResult?.choices?.[0]?.message?.content) {
+          structuredText = this.cleanContent(structuredResult.choices[0].message.content);
+        }
+      } catch (structuredError) {
+        this.logger.warn(
+          `Failed to structure document-source transcript: ${structuredError.message}`,
+        );
+      }
+
+      // 5. Create RecordingsTranscript
+      const newTranscript = qr.manager.create(RecordingsTranscript, {
+        id: uuidv4(),
+        workspaceId,
+        doctorId: userId,
+        consultationId,
+        transcribedText: mergedText,
+        structuredTranscript: structuredText,
+        documentFilePath: filePath,
+        documentType: docType,
+        sourceType: 'DOCUMENT',
+        aiProvider: resolvedProvider,
+        modelUsed: model,
+      });
+      const savedTranscript = await qr.manager.save(RecordingsTranscript, newTranscript);
+
+      // 6. Link transcript back to ai_note_source
+      aiSource.recordingTranscriptId = savedTranscript.id;
+      await qr.manager.save(CareAiNoteSource, aiSource);
+
+      await qr.commitTransaction();
+
+      this.logger.log(
+        `Transcript created from document + ai source: ${savedTranscript.id}`,
+      );
+
+      await this.safeAuditLog({
+        userId,
+        action: 'createTranscriptFromDocumentSource',
+        eventType: AuditEventType.CREATE,
+        outcome: AuditOutcome.SUCCESS,
+        resourceType: 'RecordingsTranscript',
+        resourceId: savedTranscript.id,
+        metadata: {
+          aiNoteSourceId: dto.aiNoteSourceId,
+          mergeStrategy,
+          documentType: docType,
+          documentSizeBytes: sizeBytes,
+          provider: resolvedProvider,
+          model,
+        },
+      }, workspaceId);
+
+      return {
+        ...this.mapToTranscriptDto(savedTranscript),
+        extractedText,
+        mergeStrategy,
+        documentType: docType,
+      };
+    } catch (error) {
+      await qr.rollbackTransaction();
+      this.logger.error(
+        `Failed to create transcript from document source: ${error.message}`,
+        error.stack,
+      );
+      throw error;
+    } finally {
+      await qr.release();
+      // Temp document file kept for audit; OS temp-dir cleanup handles removal.
     }
   }
 
@@ -2720,13 +3198,20 @@ export class AiNoteService {
       this.providerHealthStatus[resolvedProvider] = true;
 
       // Report usage to portal (fire-and-forget)
+      // Audio transcription uses whisper-1, not the provider's default text model.
+      // The correct model must be reported so the portal matches the whisper-1
+      // pricing tier (costPerAudioMinute) instead of the gpt-4-turbo tier.
+      const transcriptionModel = resolvedProvider === AIProvider.OPENAI
+        ? 'whisper-1'
+        : this.getDefaultModel(resolvedProvider);
+
       if (userId && workspaceId) {
         const tokenUsage = (strategy as any).getLastTokenUsage?.() || { inputTokens: 0, outputTokens: 0, totalTokens: 0 };
         this.aiUsageReportingService.reportUsage({
           userId,
           workspaceId,
           provider: resolvedProvider,
-          model: this.getDefaultModel(resolvedProvider),
+          model: transcriptionModel,
           operation: AiOperation.TRANSCRIPTION,
           tokenUsage,
           audioDurationSeconds,
@@ -2739,7 +3224,7 @@ export class AiNoteService {
       return {
         text: result.text,
         provider: resolvedProvider,
-        model: this.getDefaultModel(resolvedProvider),
+        model: transcriptionModel,
         sourceId,
       };
     } catch (error) {
@@ -4301,7 +4786,7 @@ Provide only the final transcript text, no explanations.`;
     };
 
     const defaultModelMap: Record<string, string> = {
-      [AIProvider.OPENAI]: 'gpt-4-turbo',
+      [AIProvider.OPENAI]: 'gpt-5.4',
       [AIProvider.ANTHROPIC]: 'claude-3-sonnet-20240229',
       [AIProvider.GEMINI]: 'gemini-pro',
     };
@@ -4385,6 +4870,43 @@ Provide only the final transcript text, no explanations.`;
     } catch (error) {
       this.logger.warn(
         `Failed to create audit log for ${dto.action}: ${error.message}`,
+      );
+    }
+  }
+
+  /**
+   * Write to the NoteAuditLog table (note-specific audit trail).
+   * Fire-and-forget — never throws.
+   *
+   * @param noteId  - The care note ID (required for note audit log)
+   * @param userId  - User performing the action
+   * @param actionType - NoteAuditActionType enum value
+   * @param workspaceId - Tenant workspace ID
+   * @param metadata - Additional context (provider, model, etc.)
+   * @param changedFields - Optional array of field names that changed
+   */
+  private async safeNoteAuditLog(
+    noteId: string,
+    userId: string,
+    actionType: NoteAuditActionType,
+    workspaceId: string,
+    metadata: Record<string, any> = {},
+    changedFields?: string[],
+    patientId?: string,
+  ): Promise<void> {
+    try {
+      await this.noteAuditService.logNoteAction(
+        noteId,
+        userId,
+        actionType,
+        changedFields,
+        // Merge patientId into metadata — NoteAuditService reads it from there.
+        patientId ? { ...metadata, patientId } : metadata,
+        workspaceId,
+      );
+    } catch (error) {
+      this.logger.warn(
+        `Failed to create note audit log (${actionType}) for note ${noteId}: ${error.message}`,
       );
     }
   }

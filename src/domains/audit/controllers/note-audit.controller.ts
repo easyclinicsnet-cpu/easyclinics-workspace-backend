@@ -190,8 +190,10 @@ export class NoteAuditController {
       dto.actionType,
       dto.changedFields,
       {
-        ipAddress:      dto.ipAddress,
-        userAgent:      dto.userAgent,
+        // Always use the verified server-side values for forensic fields —
+        // never trust client-supplied ipAddress / userAgent from the DTO body.
+        ipAddress:      this.extractIp(req),
+        userAgent:      req.headers['user-agent'] ?? '',
         comment:        dto.comment,
         patientId:      dto.patientId,
         aiProvider:     dto.aiProvider,
@@ -237,8 +239,8 @@ export class NoteAuditController {
       userId,
       {
         patientId: dto.patientId,
-        ipAddress: dto.ipAddress,
-        userAgent: dto.userAgent,
+        ipAddress: this.extractIp(req),
+        userAgent: req.headers['user-agent'] ?? '',
         comment:   dto.comment,
         ...(dto.metadata ?? {}),
       },
@@ -282,8 +284,8 @@ export class NoteAuditController {
         previousValues: dto.previousValues,
         newValues:      dto.newValues,
         patientId:      dto.patientId,
-        ipAddress:      dto.ipAddress,
-        userAgent:      dto.userAgent,
+        ipAddress:      this.extractIp(req),
+        userAgent:      req.headers['user-agent'] ?? '',
         comment:        dto.comment,
         ...(dto.metadata ?? {}),
       },
@@ -327,8 +329,8 @@ export class NoteAuditController {
         oldPermission: dto.oldPermission,
         newPermission: dto.newPermission,
         patientId:     dto.patientId,
-        ipAddress:     dto.ipAddress,
-        userAgent:     dto.userAgent,
+        ipAddress:     this.extractIp(req),
+        userAgent:     req.headers['user-agent'] ?? '',
         ...(dto.metadata ?? {}),
       },
       req.workspaceId,
@@ -369,8 +371,8 @@ export class NoteAuditController {
       dto.aiProvider ?? 'unknown',
       {
         patientId: dto.patientId,
-        ipAddress: dto.ipAddress,
-        userAgent: dto.userAgent,
+        ipAddress: this.extractIp(req),
+        userAgent: req.headers['user-agent'] ?? '',
         comment:   dto.comment,
         ...(dto.metadata ?? {}),
       },
@@ -561,5 +563,51 @@ export class NoteAuditController {
       data: plainToInstance(NoteAuditLogResponseDto, result.data, { excludeExtraneousValues: true }),
       meta: result.meta,
     };
+  }
+
+  /**
+   * GET /api/v1/audit/notes/:noteId/verify-chain
+   *
+   * Verifies the SHA-256 hash chain for a note's audit trail.
+   * Any discrepancy indicates a tampered record.
+   * Restricted to ADMIN_ROLES only.
+   */
+  @Get(':noteId/verify-chain')
+  @Roles(...ADMIN_ROLES)
+  @Permissions('audit:read')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    operationId: 'noteAudit_verifyChain',
+    summary:     'Verify audit hash chain integrity',
+    description:
+      'Re-computes the SHA-256 hash chain for every audit log entry of the ' +
+      'specified note. Returns valid=true when no tampering is detected.',
+  })
+  @ApiParam({ name: 'noteId', description: 'Clinical note UUID', type: String, format: 'uuid' })
+  @ApiResponse({ status: 200, description: 'Chain verification result' })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  @ApiResponse({ status: 403, description: 'Forbidden — admin role required' })
+  async verifyHashChain(
+    @Param('noteId', ParseUUIDPipe) noteId: string,
+    @Req() req: Request,
+  ): Promise<{ valid: boolean; brokenAt?: string; checkedCount: number }> {
+    return this.noteAuditService.verifyHashChain(noteId, req.workspaceId);
+  }
+
+  // ==========================================================================
+  // PRIVATE HELPERS
+  // ==========================================================================
+
+  /**
+   * Extract the real client IP address from the request.
+   * Honours X-Forwarded-For for deployments behind a reverse proxy.
+   */
+  private extractIp(req: Request): string {
+    const forwarded = req.headers['x-forwarded-for'];
+    if (forwarded) {
+      const first = Array.isArray(forwarded) ? forwarded[0] : forwarded;
+      return first.split(',')[0].trim();
+    }
+    return req.ip ?? req.socket?.remoteAddress ?? '';
   }
 }

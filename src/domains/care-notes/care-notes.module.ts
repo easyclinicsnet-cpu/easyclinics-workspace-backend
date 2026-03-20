@@ -49,6 +49,7 @@ import { NoteAuditService as AuditDomainNoteAuditService } from '../audit/servic
 import { HealthCheckService } from './services/health-check.service';
 import { TranscriptionJobService } from './services/transcription-job.service';
 import { AiUsageReportingService } from './services/ai-usage-reporting.service';
+import { DocumentExtractionService } from './services/document-extraction.service';
 
 // AI Strategies
 import {
@@ -179,6 +180,9 @@ import { NotificationsModule } from '../notifications/notifications.module';
 
     // AI Usage Reporting (portal billing integration)
     AiUsageReportingService,
+
+    // Document extraction (PDF, DOCX)
+    DocumentExtractionService,
 
     // AI Strategies
     AudioProcessor, // Audio processing for transcription

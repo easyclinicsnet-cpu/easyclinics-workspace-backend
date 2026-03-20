@@ -44,6 +44,7 @@ export * from './reject-ai-note.dto';
 export * from './regenerate-ai-note.dto';
 export * from './ai-note-source-response.dto';
 export * from './recordings-transcript-response.dto';
+export * from './update-transcript-with-document.dto';
 
 // Referral Letter DTOs
 export * from './create-referral-letter.dto';

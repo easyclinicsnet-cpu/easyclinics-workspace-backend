@@ -17,6 +17,7 @@
  *   POST   /ai-notes/transcribe                                   — transcribe audio → note
  *   POST   /ai-notes/generate                                     — generate note from text
  *   POST   /ai-notes/transcript/update-with-audio                 — append audio to transcript
+ *   POST   /ai-notes/transcript/update-with-document             — append document to transcript
  *   GET    /ai-notes/transcripts                                  — list transcripts (paginated)
  *   GET    /ai-notes/ready-for-note-generation                    — pending note generation
  *   GET    /ai-notes/failed                                       — failed transcriptions
@@ -47,6 +48,7 @@ import {
   Query,
   Req,
   UploadedFile,
+  UploadedFiles,
   UseGuards,
   UseInterceptors,
 } from '@nestjs/common';
@@ -60,7 +62,7 @@ import {
   ApiBody,
   ApiExtraModels,
 } from '@nestjs/swagger';
-import { FileInterceptor } from '@nestjs/platform-express';
+import { FileInterceptor, FilesInterceptor } from '@nestjs/platform-express';
 import { diskStorage } from 'multer';
 import { join, extname } from 'path';
 import { mkdirSync } from 'fs';
@@ -95,6 +97,18 @@ const imageStorage = diskStorage({
   },
 });
 
+const documentStorage = diskStorage({
+  destination: (_req, _file, cb) => {
+    const dest = join(process.cwd(), 'storage', 'temp', 'documents');
+    mkdirSync(dest, { recursive: true });
+    cb(null, dest);
+  },
+  filename: (_req, file, cb) => {
+    const ext = extname(file.originalname) || '.pdf';
+    cb(null, `${uuidv4()}${ext}`);
+  },
+});
+
 import { WorkspaceJwtGuard }  from '../../../common/security/auth/workspace-jwt.guard';
 import { RolesGuard }         from '../../../common/security/auth/roles.guard';
 import { PermissionsGuard }   from '../../../common/security/auth/permissions.guard';
@@ -111,6 +125,7 @@ import {
   AiNoteSourceResponseDto,
   CareNoteResponseDto,
   PaginatedResponseDto,
+  UpdateTranscriptWithDocumentDto,
 } from '../dto';
 import { TranscriptionJobService } from '../services';
 
@@ -312,6 +327,43 @@ export class AiNoteController {
     return this.aiNoteService.updateTranscriptWithAudio(
       dto as any,
       audioFile?.path,
+      req.userId,
+      req.workspaceId,
+    );
+  }
+
+  /**
+   * POST /api/v1/ai-notes/transcript/update-with-document
+   * Extracts text from a document (PDF, DOCX, or image) and appends/replaces
+   * content in an existing transcript.
+   */
+  @Post('transcript/update-with-document')
+  @Roles(...CLINICAL_ROLES)
+  @Permissions('care-notes:write')
+  @HttpCode(HttpStatus.OK)
+  @UseInterceptors(FilesInterceptor('documentFiles', 10, { storage: documentStorage }))
+  @ApiConsumes('multipart/form-data')
+  @ApiOperation({
+    operationId: 'aiNotes_updateTranscriptWithDocument',
+    summary:     'Update transcript with document content',
+    description:
+      'Extracts text from one or more documents (PDF, DOCX, or image) and appends or replaces ' +
+      'content in an existing transcript using the specified merge strategy.',
+  })
+  @ApiResponse({ status: 200, description: 'Transcript updated', type: RecordingsTranscriptResponseDto })
+  @ApiResponse({ status: 400, description: 'Invalid document or DTO' })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  @ApiResponse({ status: 403, description: 'Forbidden' })
+  @ApiResponse({ status: 404, description: 'Transcript not found' })
+  async updateTranscriptWithDocument(
+    @Body() dto: UpdateTranscriptWithDocumentDto,
+    @UploadedFiles() documentFiles: Express.Multer.File[],
+    @Req() req: Request,
+  ): Promise<RecordingsTranscriptResponseDto> {
+    const filePaths = (documentFiles || []).map(f => f.path);
+    return this.aiNoteService.updateTranscriptWithDocument(
+      dto,
+      filePaths,
       req.userId,
       req.workspaceId,
     );

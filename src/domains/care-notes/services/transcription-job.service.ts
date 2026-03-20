@@ -309,6 +309,30 @@ export class TranscriptionJobService implements OnModuleInit, OnModuleDestroy {
       `Creating background transcription: consultation=${params.consultationId}, doctor=${params.doctorId}`,
     );
 
+    // ── Duplicate guard: skip if a PENDING or PROCESSING job already exists ──
+    const existing = await this.transcriptionRepo
+      .createQueryBuilder('t')
+      .where('t.consultationId = :cid', { cid: params.consultationId })
+      .andWhere('t.doctorId = :did', { did: params.doctorId })
+      .andWhere('t.mode = :mode', { mode: TranscriptionMode.BACKGROUND })
+      .andWhere('t.status IN (:...statuses)', {
+        statuses: [TranscriptionStatus.PENDING, TranscriptionStatus.PROCESSING, TranscriptionStatus.TRANSCRIBING, TranscriptionStatus.STRUCTURING],
+      })
+      .andWhere('t.deletedAt IS NULL')
+      .getOne();
+
+    if (existing) {
+      this.logger.warn(
+        `Duplicate background job skipped: existing job ${existing.id} (status=${existing.status}) for consultation=${params.consultationId}`,
+      );
+      return {
+        mode: TranscriptionMode.BACKGROUND,
+        id: existing.id,
+        status: existing.status,
+        message: 'A transcription job is already in progress for this consultation',
+      };
+    }
+
     const transcription = this.transcriptionRepo.create({
       id: uuidv4(),
       workspaceId,
@@ -711,12 +735,17 @@ export class TranscriptionJobService implements OnModuleInit, OnModuleDestroy {
     // is still returned so the doctor is never blocked.
     if (!t.isStructured && transcript.transcribedText) {
       try {
+        // Guard: if modelUsed is an audio-only model (e.g. 'whisper-1'),
+        // fall back to the provider's default text generation model.
+        const structuringModel = transcript.modelUsed === 'whisper-1'
+          ? (this.aiNoteService as any).getDefaultModel?.(transcript.aiProvider) || 'gpt-4-turbo'
+          : transcript.modelUsed;
         const structuredResult = await this.aiNoteService.generateStructuredTranscript({
           rawText:        transcript.transcribedText,
           consultationId: transcript.consultationId,
           audioFilePath:  transcript.audioFilePath,
           provider:       transcript.aiProvider,
-          model:          transcript.modelUsed,
+          model:          structuringModel,
           userId:         transcript.doctorId,
           workspaceId:    transcript.workspaceId,
           context:        '',
@@ -1131,7 +1160,9 @@ export class TranscriptionJobService implements OnModuleInit, OnModuleDestroy {
       const MAX_STRUCTURE_ATTEMPTS = 3;
       const rawTrimmed = rawText.trim().toLowerCase();
       const resolvedProvider = (transcriptionResult.provider as AIProvider) || provider;
-      const resolvedModel = transcriptionResult.model || model;
+      // Use the job's model (from DTO, e.g. 'gpt-5.4') for text generation,
+      // NOT transcriptionResult.model which is 'whisper-1' (audio-only model).
+      const resolvedModel: string = model || transcriptionResult.model || 'gpt-4-turbo';
 
       let structuredText = rawText;
       let transcriptEntityId: string | null = null; // ID of the saved RecordingsTranscript
@@ -1361,10 +1392,21 @@ export class TranscriptionJobService implements OnModuleInit, OnModuleDestroy {
         return;
       }
 
+      // Non-retryable errors — fail immediately without burning retries
+      const nonRetryablePatterns = [
+        'not a chat model',
+        'authentication failed',
+        'API key',
+        'invalid_api_key',
+      ];
+      const isNonRetryable = nonRetryablePatterns.some((p) =>
+        error.message?.toLowerCase().includes(p.toLowerCase()),
+      );
+
       // Retry logic
       transcription.retryCount += 1;
 
-      if (transcription.retryCount < this.MAX_RETRIES) {
+      if (!isNonRetryable && transcription.retryCount < this.MAX_RETRIES) {
         // Reset to PENDING for retry
         transcription.status = TranscriptionStatus.PENDING;
         transcription.currentStep = TranscriptionStep.UPLOAD;
@@ -1382,7 +1424,9 @@ export class TranscriptionJobService implements OnModuleInit, OnModuleDestroy {
         });
 
         this.logger.error(
-          `[${operationId}] Permanently failed after ${this.MAX_RETRIES} retries`,
+          isNonRetryable
+            ? `[${operationId}] Permanently failed (non-retryable): ${error.message}`
+            : `[${operationId}] Permanently failed after ${this.MAX_RETRIES} retries`,
         );
       }
 

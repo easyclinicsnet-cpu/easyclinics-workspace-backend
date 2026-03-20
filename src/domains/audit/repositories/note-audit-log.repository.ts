@@ -174,6 +174,32 @@ export class NoteAuditLogRepository extends Repository<NoteAuditLog> {
   }
 
   /**
+   * Retrieve the hash of the most recent audit log entry for a given note.
+   * Returns 'GENESIS' when no prior log exists (first entry in the chain).
+   *
+   * @param noteId      Note ID
+   * @param workspaceId Workspace ID for tenant isolation
+   * @returns Hash string of the previous record, or 'GENESIS'
+   */
+  async getLatestHashForNote(noteId: string, workspaceId: string): Promise<string> {
+    try {
+      const latest = await this.findOne({
+        where: { noteId, workspaceId },
+        order: { createdAt: 'DESC' },
+        select: ['hash'],
+      });
+
+      return latest?.hash ?? 'GENESIS';
+    } catch (error) {
+      this.logger.error(
+        `Error retrieving latest hash for note ${noteId}: ${error.message}`,
+        error.stack,
+      );
+      return 'GENESIS';
+    }
+  }
+
+  /**
    * Find AI-related note audit logs
    * @param workspaceId Workspace ID for multi-tenancy
    * @param startDate Optional start date

@@ -37,6 +37,12 @@ export class BatchResponseDto {
   medicationItemId?: string;
   consumableItemId?: string;
   supplierId?: string;
+
+  // Resolved from relations (available on list + detail)
+  itemName?: string;
+  itemCode?: string;
+  supplierName?: string;
+
   isActive: boolean;
   createdAt: string;
   updatedAt: string;
@@ -83,6 +89,17 @@ export class BatchResponseDto {
     dto.medicationItemId = entity.medicationItemId;
     dto.consumableItemId = entity.consumableItemId;
     dto.supplierId = entity.supplierId;
+
+    // Resolve names from loaded relations.
+    // Fall back to (entity as any) access in case the relation was loaded
+    // via addSelect / getRawOne rather than leftJoinAndSelect hydration.
+    const medItem = entity.medicationItem ?? (entity as any).medicationItem;
+    const conItem = entity.consumableItem ?? (entity as any).consumableItem;
+    const sup     = entity.supplier       ?? (entity as any).supplier;
+    dto.itemName     = medItem?.name  ?? conItem?.name  ?? undefined;
+    dto.itemCode     = medItem?.code  ?? conItem?.code  ?? undefined;
+    dto.supplierName = sup?.name ?? undefined;
+
     dto.isActive = entity.isActive;
     dto.createdAt = entity.createdAt?.toISOString();
     dto.updatedAt = entity.updatedAt?.toISOString();

@@ -140,4 +140,21 @@ export class NoteAuditLog extends BaseEntity {
   // For permission changes, the new permission level
   @Column({ type: 'varchar', length: 50, nullable: true })
   newPermission?: string;
+
+  // ─── Tamper-evidence hash chain ──────────────────────────────────────────────
+  //
+  // SHA-256 of: previousHash + noteId + userId + actionType + createdAt (ISO) +
+  //             changedFields (JSON) + metadata (JSON)
+  //
+  // For the first audit entry of a note, previousHash = 'GENESIS'.
+  // This creates a per-note linked hash chain — any modification to a stored
+  // record invalidates all subsequent hashes, making tampering detectable.
+
+  /** Hash of the previous NoteAuditLog for this note (or 'GENESIS' for the first). */
+  @Column({ type: 'varchar', length: 64, nullable: true })
+  previousHash?: string;
+
+  /** SHA-256 tamper-evidence hash for this record. */
+  @Column({ type: 'varchar', length: 64, nullable: true })
+  hash?: string;
 }

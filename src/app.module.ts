@@ -1,4 +1,5 @@
-import { Module } from '@nestjs/common';
+import { Module, NestModule, MiddlewareConsumer } from '@nestjs/common';
+import { RequestContextMiddleware } from './common/context/request-context.middleware';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import * as dotenv from 'dotenv';
@@ -62,4 +63,10 @@ dotenv.config({ path: '.env' });
   controllers: [AppController],
   providers: [AppService],
 })
-export class AppModule {}
+export class AppModule implements NestModule {
+  configure(consumer: MiddlewareConsumer): void {
+    // Populate RequestContext (ipAddress, userAgent) for every route so that
+    // audit-log services can read them without needing the Express Request object.
+    consumer.apply(RequestContextMiddleware).forRoutes('*');
+  }
+}

@@ -62,4 +62,12 @@ export class NoteAuditLogResponseDto {
   @Expose()
   @Type(() => Date)
   updatedAt: Date;
+
+  /** SHA-256 tamper-evidence hash for this record. */
+  @Expose()
+  hash?: string;
+
+  /** Hash of the immediately preceding audit entry for this note ('GENESIS' for the first). */
+  @Expose()
+  previousHash?: string;
 }

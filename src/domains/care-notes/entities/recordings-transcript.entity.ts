@@ -52,4 +52,12 @@ export class RecordingsTranscript extends BaseEntity {
   /** Image file path when sourceType = IMAGE. */
   @Column({ type: 'varchar', length: 255, nullable: true })
   imageFilePath: string | null;
+
+  /** Document file path when sourceType = DOCUMENT. */
+  @Column({ type: 'varchar', length: 255, nullable: true })
+  documentFilePath: string | null;
+
+  /** Document sub-type: 'pdf', 'docx', or 'image'. */
+  @Column({ type: 'varchar', length: 20, nullable: true })
+  documentType: string | null;
 }

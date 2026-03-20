@@ -134,6 +134,19 @@ export class TranscriptionJob extends BaseEntity {
   @Column({ type: 'bigint', unsigned: true, nullable: true })
   imageFileSizeBytes: number | null;
 
+  // ── Document File (when sourceType = DOCUMENT) ────────────────────────────
+
+  @Column({ type: 'varchar', length: 500, nullable: true })
+  documentFilePath: string | null;
+
+  /** Document file size in bytes — shown in the job list. */
+  @Column({ type: 'bigint', unsigned: true, nullable: true })
+  documentFileSizeBytes: number | null;
+
+  /** Document sub-type: 'pdf', 'docx', or 'image'. */
+  @Column({ type: 'varchar', length: 20, nullable: true })
+  documentType: string | null;
+
   // ── AI Configuration (as requested by the caller) ───────────────────────────
 
   /** Requested AI provider. May differ from resolvedProvider if fallback fired. */
@@ -302,6 +315,21 @@ export class TranscriptionJob extends BaseEntity {
     this._progress(TranscriptionStep.TRANSCRIPTION, 30, 'Extracting content from image…');
   }
 
+  // ── Document-specific state transitions ──────────────────────────────────
+
+  markAsDocumentProcessing(): void {
+    this.status      = TranscriptionStatus.PROCESSING;
+    this.currentStep = TranscriptionStep.DOCUMENT_PROCESSING;
+    this.startedAt   = new Date();
+    this._progress(TranscriptionStep.DOCUMENT_PROCESSING, 10, 'Processing document…');
+  }
+
+  markAsDocumentExtracting(): void {
+    this.status      = TranscriptionStatus.TRANSCRIBING;
+    this.currentStep = TranscriptionStep.TRANSCRIPTION;
+    this._progress(TranscriptionStep.TRANSCRIPTION, 30, 'Extracting text from document…');
+  }
+
   /** Call once the raw STT text is available. */
   markAsTranscribed(rawText: string): void {
     this.rawTranscribedText = rawText;
@@ -461,6 +489,9 @@ export class TranscriptionJob extends BaseEntity {
     audioDurationSeconds: number;
     imageFilePath: string | null;
     imageFileSizeBytes: number | null;
+    documentFilePath: string | null;
+    documentFileSizeBytes: number | null;
+    documentType: string | null;
     transcriptPreview: string;
     isStructured: boolean;
     transcriptId: string;
@@ -491,6 +522,9 @@ export class TranscriptionJob extends BaseEntity {
       audioDurationSeconds: this.audioDurationSeconds,
       imageFilePath:       this.imageFilePath,
       imageFileSizeBytes:  this.imageFileSizeBytes,
+      documentFilePath:    this.documentFilePath,
+      documentFileSizeBytes: this.documentFileSizeBytes,
+      documentType:        this.documentType,
       transcriptPreview:   this.transcriptPreview,
       isStructured:        this.isStructured,
       transcriptId:        this.transcriptId,
